@@ -169,7 +169,7 @@ describe('WagerSettlement', () => {
     it('reference must be PROCESSED', () => {
       const wallet = openWallet('10.00');
       const bet = tx(Kind.Bet, '80.00');
-      settle(bet, wallet); // REJECTED
+      settle(bet, wallet);
       const refund = reversal(Kind.Refund, bet);
       settle(refund, wallet, { reference: bet });
       expect(refund.failureCode).toBe(FailureCode.ReferenceNotProcessed);
@@ -197,8 +197,8 @@ describe('WagerSettlement', () => {
 
     it('of a WIN without enough balance is REVERSAL_INSUFFICIENT_FUNDS', () => {
       const wallet = openWallet('100.00');
-      const win = processed(Kind.Win, wallet, '50.00'); // 150
-      processed(Kind.Bet, wallet, '120.00'); // 30
+      const win = processed(Kind.Win, wallet, '50.00');
+      processed(Kind.Bet, wallet, '120.00');
       const rollback = reversal(Kind.Rollback, win);
       settle(rollback, wallet, { reference: win });
 
@@ -222,7 +222,7 @@ describe('WagerSettlement', () => {
       const bet = tx(Kind.Bet, '25.00');
       const rollback = reversal(Kind.Rollback, bet);
 
-      settle(rollback, wallet); // referência ainda não existe
+      settle(rollback, wallet);
       expect(rollback.status).toBe(Status.PendingReference);
       expect(rollback.referenceAttempts).toBe(1);
       expect(rollback.nextReferenceCheckAt).toEqual(new Date(at.getTime() + 1_000));
@@ -231,7 +231,7 @@ describe('WagerSettlement', () => {
       expect(rollback.referenceAttempts).toBe(2);
       expect(rollback.nextReferenceCheckAt).toEqual(new Date(at.getTime() + 2_000));
 
-      settle(bet, wallet); // a BET finalmente chega
+      settle(bet, wallet);
       settle(rollback, wallet, { reference: bet });
       expect(rollback.status).toBe(Status.Processed);
       expect(wallet.balance.equals(brl('100.00'))).toBe(true);

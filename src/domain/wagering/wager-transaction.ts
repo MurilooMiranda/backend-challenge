@@ -45,7 +45,6 @@ export interface WagerTransactionState extends CreateWagerTransactionProps {
   status: WagerTransactionStatus;
   referenceTransactionId?: string;
   failureCode?: FailureCode;
-  /** momento em que atingiu um estado terminal */
   processedAt?: Date;
   resultingBalance?: Money;
   referenceAttempts: number;
