@@ -17,7 +17,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
-    
+
   localstack:
     image: localstack/localstack:4.4
     environment:
@@ -28,10 +28,14 @@ services:
     volumes:
       - ./docker/localstack/init:/etc/localstack/init/ready.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'curl -sf http://localhost:4566/_localstack/init/ready | grep -q ''"completed": true''']
+      test:
+        [
+          'CMD-SHELL',
+          'curl -sf http://localhost:4566/_localstack/init/ready | grep -q ''"completed": true''',
+        ]
       interval: 2s
       timeout: 3s
       retries: 60
-  
+
 volumes:
   pgdata:
