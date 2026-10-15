@@ -265,14 +265,16 @@ describe('WagerSettlement', () => {
       });
       settle(usdBet, wallet);
       expect(usdBet.failureCode).toBe(FailureCode.CurrencyMismatch);
+      expect(usdBet.resultingBalance).toBeUndefined();
       expect(wallet.version).toBe(1);
     });
 
-    it('rejects a wallet owned by another player', () => {
+    it('rejects a wallet owned by another player without exposing its balance', () => {
       const wallet = openWallet();
       const bet = tx(Kind.Bet, '1.00', { playerId: 'player-OTHER' });
       settle(bet, wallet);
       expect(bet.failureCode).toBe(FailureCode.WalletPlayerMismatch);
+      expect(bet.resultingBalance).toBeUndefined();
     });
 
     it('refuses to settle a terminal transaction (programming error)', () => {

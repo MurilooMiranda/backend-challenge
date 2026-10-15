@@ -44,10 +44,12 @@ export class WagerSettlement {
       throw new Error(`Wallet ${wallet.id} does not belong to transaction ${tx.id}`);
     }
     if (wallet.playerId !== tx.playerId) {
-      return WagerSettlement.reject(tx, FailureCode.WalletPlayerMismatch, wallet, at);
+      tx.reject(FailureCode.WalletPlayerMismatch, undefined, at);
+      return {};
     }
     if (wallet.currency !== tx.money.currency) {
-      return WagerSettlement.reject(tx, FailureCode.CurrencyMismatch, wallet, at);
+      tx.reject(FailureCode.CurrencyMismatch, undefined, at);
+      return {};
     }
 
     if (tx.requiresReference()) {
