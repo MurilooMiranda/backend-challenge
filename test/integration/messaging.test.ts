@@ -36,13 +36,22 @@ class FakeClock implements Clock {
 }
 
 class RecordingPublisher implements EventPublisher {
+  readonly maxBatchSize = 10;
   readonly published: string[] = [];
+  readonly publishedByAggregate = new Map<string, string[]>();
   constructor(private readonly delayMs = 0) {}
-  async publish(message: OutboxMessage): Promise<void> {
+  async publishBatch(messages: OutboxMessage[]) {
     if (this.delayMs > 0) {
       await Bun.sleep(this.delayMs);
     }
-    this.published.push(message.id);
+    for (const message of messages) {
+      this.published.push(message.id);
+      this.publishedByAggregate.set(message.aggregateId, [
+        ...(this.publishedByAggregate.get(message.aggregateId) ?? []),
+        message.id,
+      ]);
+    }
+    return messages.map((message) => ({ messageId: message.id }));
   }
 }
 
@@ -187,9 +196,9 @@ describe('transactional outbox', () => {
 
     const clock = new FakeClock();
     const failing: EventPublisher = {
-      publish: async () => {
-        throw new Error('SQS down');
-      },
+      maxBatchSize: 10,
+      publishBatch: async (messages) =>
+        messages.map((message) => ({ messageId: message.id, error: 'SQS down' })),
     };
     const result = await new PublishOutboxEvents(
       new MikroOrmOutboxStore(orm),
@@ -212,6 +221,77 @@ describe('transactional outbox', () => {
     clock.advance(5_000);
     expect(await publishAll(retry)).toBe(3);
     expect(recorder.published).toEqual(expectedOrder);
+  });
+
+  it('competing publishers keep per-wallet order for wallets with long event backlogs', async () => {
+    const wallets = await Promise.all(Array.from({ length: 3 }, () => openWallet('1000.00')));
+    for (let i = 0; i < 25; i++) {
+      await Promise.all(
+        wallets.map((w) =>
+          useCases.processWager.execute(
+            wagerCommand(w.id, w.playerId, { money: { amount: '1.00', currency: 'BRL' } }),
+          ),
+        ),
+      );
+    }
+    const rows = await orm.em.execute<{ id: string; aggregate_id: string }[]>(
+      `SELECT id, aggregate_id FROM outbox_messages ORDER BY sequence`,
+    );
+    expect(rows).toHaveLength(3 * 51);
+
+    const recorder = new RecordingPublisher(3);
+    const publisher = () =>
+      new PublishOutboxEvents(new MikroOrmOutboxStore(orm, 7), recorder, new SystemClock());
+    await Promise.all([
+      publishAll(publisher(), 2),
+      publishAll(publisher(), 2),
+      publishAll(publisher(), 2),
+    ]);
+
+    expect(new Set(recorder.published).size).toBe(rows.length);
+    for (const wallet of wallets) {
+      const expected = rows.filter((row) => row.aggregate_id === wallet.id).map((row) => row.id);
+      expect(recorder.publishedByAggregate.get(wallet.id)).toEqual(expected);
+    }
+  });
+
+  it('a partially failed batch republishes from the first failed event of that wallet', async () => {
+    const wallet = await openWallet('100.00');
+    for (let i = 0; i < 3; i++) {
+      await useCases.processWager.execute(
+        wagerCommand(wallet.id, wallet.playerId, { money: { amount: '1.00', currency: 'BRL' } }),
+      );
+    }
+    const order = await pendingIdsInOrder();
+    expect(order).toHaveLength(7);
+
+    const accepted: string[] = [];
+    const flaky: EventPublisher = {
+      maxBatchSize: 10,
+      publishBatch: async (messages) =>
+        messages.map((message, index) => {
+          if (index === 2) {
+            return { messageId: message.id, error: 'throttled' };
+          }
+          accepted.push(message.id);
+          return { messageId: message.id };
+        }),
+    };
+    const clock = new FakeClock();
+    expect(
+      await new PublishOutboxEvents(new MikroOrmOutboxStore(orm), flaky, clock).execute(),
+    ).toEqual({
+      published: 2,
+      failed: 1,
+    });
+    expect(await pendingIdsInOrder()).toEqual(order.slice(2));
+
+    clock.advance(5_000);
+    const recorder = new RecordingPublisher();
+    expect(
+      await publishAll(new PublishOutboxEvents(new MikroOrmOutboxStore(orm), recorder, clock)),
+    ).toBe(5);
+    expect(recorder.published).toEqual(order.slice(2));
   });
 });
 

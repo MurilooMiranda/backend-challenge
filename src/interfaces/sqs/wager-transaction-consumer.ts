@@ -29,6 +29,7 @@ export interface WagerConsumerOptions {
   deadLetterQueueUrl: string;
   consumerName: string;
   maxMessages: number;
+  pollers?: number;
   waitTimeSeconds: number;
   retryBaseSeconds: number;
   maxRetrySeconds: number;
@@ -51,6 +52,7 @@ export function defaultConsumerOptions(
     deadLetterQueueUrl,
     consumerName: 'wager-transactions-consumer',
     maxMessages: 10,
+    pollers: Number(process.env.SQS_CONSUMER_POLLERS ?? 4),
     waitTimeSeconds: Number(process.env.SQS_WAIT_TIME_SECONDS ?? 20),
     retryBaseSeconds: Number(process.env.SQS_RETRY_BASE_SECONDS ?? 2),
     maxRetrySeconds: 60,
@@ -71,8 +73,8 @@ export function isPermanentFailure(error: unknown): boolean {
 export class WagerTransactionConsumer {
   private readonly logger = new Logger(WagerTransactionConsumer.name);
   private running = false;
-  private loop: Promise<void> | undefined;
-  private receiveAbort: AbortController | undefined;
+  private loops: Promise<void>[] = [];
+  private readonly receiveAborts = new Set<AbortController>();
 
   constructor(
     private readonly sqs: SQSClient,
@@ -86,26 +88,32 @@ export class WagerTransactionConsumer {
       return;
     }
     this.running = true;
-    this.loop = this.run();
+    this.loops = Array.from({ length: Math.max(1, this.options.pollers ?? 1) }, () => this.run());
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    this.receiveAbort?.abort();
-    await this.loop;
+    for (const abort of this.receiveAborts) {
+      abort.abort();
+    }
+    await Promise.all(this.loops);
+    this.loops = [];
   }
 
   async pollOnce(): Promise<ConsumeOutcome[]> {
-    this.receiveAbort = new AbortController();
-    const response = await this.sqs.send(
-      new ReceiveMessageCommand({
-        QueueUrl: this.options.queueUrl,
-        MaxNumberOfMessages: this.options.maxMessages,
-        WaitTimeSeconds: this.options.waitTimeSeconds,
-        MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
-      }),
-      { abortSignal: this.receiveAbort.signal },
-    );
+    const abort = new AbortController();
+    this.receiveAborts.add(abort);
+    const response = await this.sqs
+      .send(
+        new ReceiveMessageCommand({
+          QueueUrl: this.options.queueUrl,
+          MaxNumberOfMessages: this.options.maxMessages,
+          WaitTimeSeconds: this.options.waitTimeSeconds,
+          MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
+        }),
+        { abortSignal: abort.signal },
+      )
+      .finally(() => this.receiveAborts.delete(abort));
     const messages = response.Messages ?? [];
 
     const groups = new Map<string, Message[]>();

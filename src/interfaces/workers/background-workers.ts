@@ -10,7 +10,7 @@ import { RetryPendingReferences } from '@/application/wagering/retry-pending-ref
 import { PollingWorker } from '@/infrastructure/workers/polling-worker';
 import { WagerTransactionConsumer } from '../sqs/wager-transaction-consumer';
 
-const OUTBOX_BATCH_SIZE = 25;
+const OUTBOX_BATCH_SIZE = 100;
 const PENDING_REFERENCE_BATCH_SIZE = 50;
 
 @Injectable()

@@ -1,5 +1,5 @@
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import type { EventPublisher } from '@/application/ports';
+import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
+import type { EventPublisher, PublishOutcome } from '@/application/ports';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
 
 export const SQS_CLIENT = Symbol('SQSClient');
@@ -33,22 +33,45 @@ export function readSqsQueues(): SqsQueues {
 }
 
 export class SqsEventPublisher implements EventPublisher {
+  readonly maxBatchSize = 10;
+
   constructor(
     private readonly sqs: SQSClient,
     private readonly queueUrl: string,
   ) {}
 
-  async publish(message: OutboxMessage): Promise<void> {
-    await this.sqs.send(
-      new SendMessageCommand({
-        QueueUrl: this.queueUrl,
-        MessageBody: JSON.stringify(message.payload),
-        MessageGroupId: message.aggregateId,
-        MessageDeduplicationId: message.id,
-        MessageAttributes: {
-          eventType: { DataType: 'String', StringValue: message.eventType },
-        },
-      }),
-    );
+  async publishBatch(messages: OutboxMessage[]): Promise<PublishOutcome[]> {
+    if (messages.length === 0) {
+      return [];
+    }
+    try {
+      const response = await this.sqs.send(
+        new SendMessageBatchCommand({
+          QueueUrl: this.queueUrl,
+          Entries: messages.map((message, index) => ({
+            Id: String(index),
+            MessageBody: JSON.stringify(message.payload),
+            MessageGroupId: message.aggregateId,
+            MessageDeduplicationId: message.id,
+            MessageAttributes: {
+              eventType: { DataType: 'String', StringValue: message.eventType },
+            },
+          })),
+        }),
+      );
+      const failures = new Map(
+        (response.Failed ?? []).map((failure) => [
+          failure.Id,
+          failure.Message ?? failure.Code ?? 'publish failed',
+        ]),
+      );
+      return messages.map((message, index) => {
+        const error = failures.get(String(index));
+        return error === undefined ? { messageId: message.id } : { messageId: message.id, error };
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return messages.map((message) => ({ messageId: message.id, error: reason }));
+    }
   }
 }

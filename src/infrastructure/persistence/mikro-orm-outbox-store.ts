@@ -11,7 +11,10 @@ export interface OutboxStats {
 }
 
 export class MikroOrmOutboxStore implements OutboxStore {
-  constructor(private readonly orm: MikroORM) {}
+  constructor(
+    private readonly orm: MikroORM,
+    private readonly maxPerAggregate = 20,
+  ) {}
 
   async processDueBatch(
     limit: number,
@@ -20,8 +23,8 @@ export class MikroOrmOutboxStore implements OutboxStore {
   ): Promise<OutboxMessage[]> {
     try {
       return await this.orm.em.fork().transactional(async (em) => {
-        const claimed = await em.execute<{ id: string }[]>(
-          `SELECT o.id
+        const heads = await em.execute<{ aggregate_id: string }[]>(
+          `SELECT o.aggregate_id
              FROM outbox_messages o
             WHERE o.published_at IS NULL
               AND o.next_attempt_at <= ?
@@ -37,9 +40,27 @@ export class MikroOrmOutboxStore implements OutboxStore {
             FOR UPDATE SKIP LOCKED`,
           [now, limit],
         );
-        if (claimed.length === 0) {
+        if (heads.length === 0) {
           return [];
         }
+
+        const claimed = await em.execute<{ id: string }[]>(
+          `SELECT id
+             FROM outbox_messages
+            WHERE id IN (
+              SELECT id
+                FROM (
+                  SELECT id,
+                         row_number() OVER (PARTITION BY aggregate_id ORDER BY sequence) AS position
+                    FROM outbox_messages
+                   WHERE published_at IS NULL
+                     AND aggregate_id IN (?)
+                ) ranked
+               WHERE position <= ?
+            )
+            FOR UPDATE`,
+          [heads.map((head) => head.aggregate_id), this.maxPerAggregate],
+        );
 
         const records = await em.find(
           OutboxRecord,

@@ -53,20 +53,39 @@ Sobe um serviço `migrate` (executa as migrations uma única vez) e três répli
 
 ## Comandos
 
-| Comando                    | O que faz                                                       |
-| -------------------------- | --------------------------------------------------------------- |
-| `bun run dev`              | API com hot reload                                              |
-| `bun run start`            | API sem hot reload                                              |
-| `bun run db:migrate`       | aplica migrations pendentes                                     |
-| `bun run db:rollback`      | reverte a última migration                                      |
-| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                              |
-| `bun run format`           | Prettier                                                        |
-| `bun test`                 | toda a suíte                                                    |
-| `bun run test:unit`        | testes unitários (sem infraestrutura)                           |
-| `bun run test:integration` | Postgres e LocalStack reais                                     |
-| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart |
+| Comando                    | O que faz                                                                   |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `bun run dev`              | API com hot reload                                                          |
+| `bun run start`            | API sem hot reload                                                          |
+| `bun run db:migrate`       | aplica migrations pendentes                                                 |
+| `bun run db:rollback`      | reverte a última migration                                                  |
+| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                                          |
+| `bun run format`           | Prettier                                                                    |
+| `bun test`                 | toda a suíte                                                                |
+| `bun run test:unit`        | testes unitários (sem infraestrutura)                                       |
+| `bun run test:integration` | Postgres e LocalStack reais                                                 |
+| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart             |
+| `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md` |
 
 Os testes de integração e concorrência precisam do `docker compose up -d`. Eles usam o banco `wagering_test` e criam filas temporárias próprias no LocalStack, então podem rodar com a aplicação de desenvolvimento ligada.
+
+### Teste de carga
+
+```bash
+bun run test:load
+```
+
+Cria (se necessário) o banco `wagering_load`, sobe 3 instâncias da aplicação, abre 204 wallets (4 delas "quentes", que recebem 20% do tráfego), aplica 30 s de carga HTTP com 48 usuários virtuais (mistura de `BET`, `WIN`, `LOSS`, `REFUND` e 5% de replays), envia 2.000 mensagens pela fila e, ao final, verifica que o saldo de toda wallet é igual ao saldo reconstruído pelo ledger. O resultado vai para `load-test/results/latest.md` e `latest.json`; metodologia e análise estão em [load-test/REPORT.md](load-test/REPORT.md).
+
+| Variável                            | Padrão              |
+| ----------------------------------- | ------------------- |
+| `LOAD_INSTANCES`                    | `3`                 |
+| `LOAD_DURATION_SECONDS`             | `30`                |
+| `LOAD_CONCURRENCY`                  | `48`                |
+| `LOAD_WALLETS` / `LOAD_HOT_WALLETS` | `200` / `4`         |
+| `LOAD_HOT_SHARE`                    | `0.2`               |
+| `LOAD_SQS_MESSAGES`                 | `2000`              |
+| `LOAD_DATABASE_URL`                 | `.../wagering_load` |
 
 ## API
 
@@ -177,6 +196,7 @@ docker compose exec localstack awslocal sqs receive-message \
 | `RUN_MIGRATIONS`                              | `false`             | aplica migrations ao subir                                       |
 | `SQS_WAIT_TIME_SECONDS`                       | `20`                | long polling do consumidor                                       |
 | `SQS_RETRY_BASE_SECONDS`                      | `2`                 | base do backoff de falhas transitórias                           |
+| `SQS_CONSUMER_POLLERS`                        | `4`                 | loops de long polling concorrentes por instância                 |
 | `OUTBOX_POLL_INTERVAL_MS`                     | `500`               | intervalo ocioso do publisher                                    |
 | `PENDING_REFERENCE_POLL_INTERVAL_MS`          | `1000`              | intervalo ocioso do worker de referências                        |
 | `LOG_LEVEL`                                   | `info`              | `trace`, `debug`, `info`, `warn`, `error`                        |
@@ -194,4 +214,5 @@ test/
 ├── unit/            domínio e aplicação, sem I/O
 ├── integration/     Postgres e LocalStack reais
 └── concurrency/     três processos da aplicação em paralelo
+load-test/           gerador de carga, relatório e resultados
 ```

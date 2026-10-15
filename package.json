@@ -12,7 +12,8 @@
     "db:migrate": "bun src/infrastructure/persistence/migrate.ts up",
     "db:rollback": "bun src/infrastructure/persistence/migrate.ts down",
     "format": "prettier --write .",
-    "test:concurrency": "bun test test/concurrency"
+    "test:concurrency": "bun test test/concurrency",
+    "test:load": "bun load-test/run.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

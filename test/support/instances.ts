@@ -23,13 +23,18 @@ export async function waitUntil(
   throw new Error(`condition not met within ${timeoutMs}ms`);
 }
 
-export async function startInstance(port: number, queues: TestQueues): Promise<AppInstance> {
+export async function startInstance(
+  port: number,
+  queues: TestQueues,
+  databaseUrl: string = TEST_DATABASE_URL,
+  logFile?: string,
+): Promise<AppInstance> {
   const child = Bun.spawn([process.execPath, 'src/main.ts'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       PORT: String(port),
-      DATABASE_URL: TEST_DATABASE_URL,
+      DATABASE_URL: databaseUrl,
       SQS_TRANSACTIONS_QUEUE_URL: queues.queueUrl,
       SQS_TRANSACTIONS_DLQ_URL: queues.dlqUrl,
       SQS_EVENTS_QUEUE_URL: queues.eventsUrl,
@@ -39,10 +44,10 @@ export async function startInstance(port: number, queues: TestQueues): Promise<A
       SQS_RETRY_BASE_SECONDS: '0',
       OUTBOX_POLL_INTERVAL_MS: '100',
       PENDING_REFERENCE_POLL_INTERVAL_MS: '250',
-      LOG_LEVEL: 'error',
+      LOG_LEVEL: logFile ? 'warn' : 'error',
     },
-    stdout: 'ignore',
-    stderr: 'ignore',
+    stdout: logFile ? Bun.file(logFile) : 'ignore',
+    stderr: logFile ? Bun.file(`${logFile}.err`) : 'ignore',
   });
   const url = `http://localhost:${port}`;
   await waitUntil(async () => (await fetch(`${url}/health/ready`)).ok, 30_000);

@@ -81,8 +81,14 @@ export interface OutboxStore {
   ): Promise<OutboxMessage[]>;
 }
 
+export interface PublishOutcome {
+  messageId: string;
+  error?: string;
+}
+
 export interface EventPublisher {
-  publish(message: OutboxMessage): Promise<void>;
+  readonly maxBatchSize: number;
+  publishBatch(messages: OutboxMessage[]): Promise<PublishOutcome[]>;
 }
 
 export const CLOCK = Symbol('Clock');

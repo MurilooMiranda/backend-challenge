@@ -1,0 +1,118 @@
+{
+  "generatedAt": "2026-10-15T18:19:16.498Z",
+  "config": {
+    "instances": 3,
+    "durationSeconds": 30,
+    "concurrency": 48,
+    "wallets": 200,
+    "hotWallets": 4,
+    "hotShare": 0.2,
+    "sqsMessages": 2000,
+    "databaseUrl": "postgres://wagering:wagering@localhost:5432/wagering_load"
+  },
+  "environment": {
+    "os": "Windows_NT 10.0.26200 (x64)",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-1355U x12",
+    "memoryGb": 32,
+    "bun": "1.4.3",
+    "postgres": "17.11"
+  },
+  "http": {
+    "seconds": 30.167980000000004,
+    "requests": 8037,
+    "throughput": 266.4082911749477,
+    "latency": {
+      "count": 8037,
+      "mean": 179.54891673510005,
+      "p50": 165.09440000000177,
+      "p95": 309.6140000000014,
+      "p99": 439.10939999999937,
+      "max": 826.5830000000024
+    },
+    "latencyByKind": {
+      "BET": {
+        "count": 5244,
+        "mean": 184.4112077612512,
+        "p50": 168.17079999999987,
+        "p95": 315.22160000000076,
+        "p99": 444.1331000000009,
+        "max": 826.5830000000024
+      },
+      "WIN": {
+        "count": 1221,
+        "mean": 183.74802972972975,
+        "p50": 169.3888999999981,
+        "p95": 301.3172000000013,
+        "p99": 439.10939999999937,
+        "max": 661.0917000000009
+      },
+      "LOSS": {
+        "count": 786,
+        "mean": 166.82710801526727,
+        "p50": 150.43710000000283,
+        "p95": 300.35519999999997,
+        "p99": 448.5542000000005,
+        "max": 633.8358000000007
+      },
+      "REFUND": {
+        "count": 389,
+        "mean": 199.1369511568125,
+        "p50": 187.53159999999843,
+        "p95": 311.76090000000113,
+        "p99": 478.9022999999979,
+        "max": 654.4386000000013
+      }
+    },
+    "replayLatency": {
+      "count": 397,
+      "mean": 108.40187682619641,
+      "p50": 100.51399999999921,
+      "p95": 173.1890999999996,
+      "p99": 311.09799999999814,
+      "max": 337.3630000000012
+    },
+    "statuses": {
+      "200": 397,
+      "201": 7640
+    },
+    "errors": 0,
+    "errorRate": 0
+  },
+  "server": {
+    "processingP95Ms": 297.2962648556875,
+    "processingP99Ms": 439.47142857142876,
+    "lockWaitP50Ms": 9.869525308156307,
+    "lockWaitP95Ms": 129.22999999999993,
+    "lockWaitP99Ms": 281.42941176470606,
+    "lockConflicts": 0,
+    "duplicates": 397,
+    "sqsRetries": 0,
+    "deadLettered": 0,
+    "outboxFailed": 0
+  },
+  "outbox": {
+    "maxPending": 329,
+    "maxLagSeconds": 0.739616,
+    "lagP95Seconds": 0.627771,
+    "drainSecondsAfterHttp": 0.2573445000000065
+  },
+  "sqs": {
+    "messages": 2000,
+    "enqueueSeconds": 2.1535239999999978,
+    "totalSeconds": 20.699857799999997,
+    "throughput": 96.61902121859022
+  },
+  "correctness": {
+    "wallets": 204,
+    "divergentWallets": 0,
+    "ledgerEntries": 9058,
+    "transactions": 9844,
+    "statuses": [
+      {
+        "status": "PROCESSED",
+        "failure_code": null,
+        "n": 9640
+      }
+    ]
+  }
+}

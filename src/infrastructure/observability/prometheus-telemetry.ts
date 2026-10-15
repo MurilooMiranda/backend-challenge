@@ -32,7 +32,7 @@ export class PrometheusTelemetry implements Telemetry {
     name: 'wager_processing_duration_seconds',
     help: 'End-to-end processing latency of a wager transaction',
     labelNames: ['channel'],
-    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5],
     registers: [this.registry],
   });
   private readonly lockConflicts = new Counter({
@@ -44,7 +44,7 @@ export class PrometheusTelemetry implements Telemetry {
   private readonly lockWait = new Histogram({
     name: 'wallet_lock_wait_seconds',
     help: 'Time spent waiting for the per-wallet row lock',
-    buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+    buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1, 2.5],
     registers: [this.registry],
   });
   private readonly reconciliations = new Counter({
