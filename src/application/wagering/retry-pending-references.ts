@@ -1,5 +1,5 @@
 import { ReferenceRetryPolicy } from '@/domain/wagering/reference-retry-policy';
-import { WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
+import { type WagerTransaction, WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import type {
   Clock,
   IdGenerator,
@@ -7,6 +7,7 @@ import type {
   TransactionRunner,
   WageringQueries,
 } from '../ports';
+import { type Telemetry, noopTelemetry } from '../telemetry';
 import { settleAndStage } from './settle-and-stage';
 
 export interface RetryPendingReferencesResult {
@@ -21,24 +22,38 @@ export class RetryPendingReferences {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly retryPolicy: ReferenceRetryPolicy = ReferenceRetryPolicy.default(),
+    private readonly telemetry: Telemetry = noopTelemetry,
   ) {}
 
   async execute(limit = 50): Promise<RetryPendingReferencesResult> {
     const due = await this.queries.findDuePendingReferences(this.clock.now(), limit);
     let resolved = 0;
     for (const ref of due) {
-      if (await this.retry(ref)) {
+      const startedAt = performance.now();
+      const settled = await this.retry(ref);
+      if (settled) {
         resolved += 1;
+        this.telemetry.transactionSettled({
+          channel: 'worker',
+          transactionId: settled.id,
+          walletId: settled.walletId,
+          providerId: settled.providerId,
+          kind: settled.kind,
+          status: settled.status,
+          failureCode: settled.failureCode ?? null,
+          idempotentReplay: false,
+          durationSeconds: (performance.now() - startedAt) / 1000,
+        });
       }
     }
     return { checked: due.length, resolved };
   }
 
-  private retry(ref: PendingReferenceRef): Promise<boolean> {
+  private retry(ref: PendingReferenceRef): Promise<WagerTransaction | null> {
     return this.transactions.run(async (uow) => {
       const wallet = await uow.lockWallet(ref.walletId);
       if (!wallet) {
-        return false;
+        return null;
       }
 
       const tx = await uow.findTransactionById(ref.transactionId);
@@ -48,7 +63,7 @@ export class RetryPendingReferences {
         tx.status !== WagerTransactionStatus.PendingReference ||
         (tx.nextReferenceCheckAt && tx.nextReferenceCheckAt.getTime() > now.getTime())
       ) {
-        return false;
+        return null;
       }
 
       await settleAndStage(uow, tx, wallet, {
@@ -60,7 +75,7 @@ export class RetryPendingReferences {
         isNew: false,
       });
 
-      return tx.status !== WagerTransactionStatus.PendingReference;
+      return tx.status === WagerTransactionStatus.PendingReference ? null : tx;
     });
   }
 }

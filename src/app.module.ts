@@ -1,5 +1,5 @@
-import type { SQSClient } from '@aws-sdk/client-sqs';
-import { Module } from '@nestjs/common';
+import { GetQueueAttributesCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { PublishOutboxEvents } from './application/messaging/publish-outbox-events';
@@ -11,17 +11,21 @@ import {
   ID_GENERATOR,
   type IdGenerator,
   OUTBOX_STORE,
-  type OutboxStore,
   TRANSACTION_RUNNER,
   type TransactionRunner,
   WAGERING_QUERIES,
   type WageringQueries,
 } from './application/ports';
+import { TELEMETRY, type Telemetry } from './application/telemetry';
 import { ProcessWagerTransaction } from './application/wagering/process-wager-transaction';
 import { RetryPendingReferences } from './application/wagering/retry-pending-references';
+import { GetWalletLedger } from './application/wallets/get-wallet-ledger';
 import { OpenWallet } from './application/wallets/open-wallet';
+import { ReconcileWallet } from './application/wallets/reconcile-wallet';
+import { ReferenceRetryPolicy } from './domain/wagering/reference-retry-policy';
 import { SQS_CLIENT, SqsEventPublisher, readSqsQueues } from './infrastructure/messaging/sqs';
 import { SqsShutdown, sqsClientProvider } from './infrastructure/messaging/sqs.provider';
+import { PrometheusTelemetry } from './infrastructure/observability/prometheus-telemetry';
 import { MikroOrmOutboxStore } from './infrastructure/persistence/mikro-orm-outbox-store';
 import { MikroOrmTransactionRunner } from './infrastructure/persistence/mikro-orm-transaction-runner';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-wagering-queries';
@@ -30,6 +34,8 @@ import { SystemClock, UuidV7Generator } from './infrastructure/system';
 import { AuthGuard } from './interfaces/http/auth.guard';
 import { HealthController } from './interfaces/http/health.controller';
 import { HttpErrorFilter } from './interfaces/http/http-error.filter';
+import { MetricsController } from './interfaces/http/metrics.controller';
+import { requestContextMiddleware } from './interfaces/http/request-context.middleware';
 import { WageringController } from './interfaces/http/wagering.controller';
 import { WalletsController } from './interfaces/http/wallets.controller';
 import {
@@ -39,7 +45,7 @@ import {
 import { BackgroundWorkers } from './interfaces/workers/background-workers';
 
 @Module({
-  controllers: [HealthController, WalletsController, WageringController],
+  controllers: [HealthController, MetricsController, WalletsController, WageringController],
   providers: [
     ormProvider,
     OrmShutdown,
@@ -51,18 +57,40 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
     { provide: CLOCK, useValue: new SystemClock() },
     { provide: ID_GENERATOR, useValue: new UuidV7Generator() },
     {
-      provide: TRANSACTION_RUNNER,
-      useFactory: (orm: MikroORM) => new MikroOrmTransactionRunner(orm),
+      provide: OUTBOX_STORE,
+      useFactory: (orm: MikroORM) => new MikroOrmOutboxStore(orm),
       inject: [MIKRO_ORM],
+    },
+    {
+      provide: TELEMETRY,
+      useFactory: (outbox: MikroOrmOutboxStore, sqs: SQSClient) => {
+        const telemetry = new PrometheusTelemetry();
+        const deadLetterQueueUrl = readSqsQueues().transactionsDlqUrl;
+        telemetry.registerGauges({
+          outboxStats: () => outbox.stats(new Date()),
+          deadLetterDepth: async () => {
+            const response = await sqs.send(
+              new GetQueueAttributesCommand({
+                QueueUrl: deadLetterQueueUrl,
+                AttributeNames: ['ApproximateNumberOfMessages'],
+              }),
+            );
+            return Number(response.Attributes?.ApproximateNumberOfMessages ?? 0);
+          },
+        });
+        return telemetry;
+      },
+      inject: [OUTBOX_STORE, SQS_CLIENT],
+    },
+    {
+      provide: TRANSACTION_RUNNER,
+      useFactory: (orm: MikroORM, telemetry: Telemetry) =>
+        new MikroOrmTransactionRunner(orm, telemetry),
+      inject: [MIKRO_ORM, TELEMETRY],
     },
     {
       provide: WAGERING_QUERIES,
       useFactory: (orm: MikroORM) => new MikroOrmWageringQueries(orm),
-      inject: [MIKRO_ORM],
-    },
-    {
-      provide: OUTBOX_STORE,
-      useFactory: (orm: MikroORM) => new MikroOrmOutboxStore(orm),
       inject: [MIKRO_ORM],
     },
     {
@@ -77,10 +105,26 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
       inject: [TRANSACTION_RUNNER, CLOCK, ID_GENERATOR],
     },
     {
+      provide: GetWalletLedger,
+      useFactory: (queries: WageringQueries) => new GetWalletLedger(queries),
+      inject: [WAGERING_QUERIES],
+    },
+    {
+      provide: ReconcileWallet,
+      useFactory: (queries: WageringQueries, telemetry: Telemetry) =>
+        new ReconcileWallet(queries, telemetry),
+      inject: [WAGERING_QUERIES, TELEMETRY],
+    },
+    {
       provide: ProcessWagerTransaction,
-      useFactory: (runner: TransactionRunner, clock: Clock, ids: IdGenerator) =>
-        new ProcessWagerTransaction(runner, clock, ids),
-      inject: [TRANSACTION_RUNNER, CLOCK, ID_GENERATOR],
+      useFactory: (
+        runner: TransactionRunner,
+        clock: Clock,
+        ids: IdGenerator,
+        telemetry: Telemetry,
+      ) =>
+        new ProcessWagerTransaction(runner, clock, ids, ReferenceRetryPolicy.default(), telemetry),
+      inject: [TRANSACTION_RUNNER, CLOCK, ID_GENERATOR, TELEMETRY],
     },
     {
       provide: RetryPendingReferences,
@@ -89,27 +133,45 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
         queries: WageringQueries,
         clock: Clock,
         ids: IdGenerator,
-      ) => new RetryPendingReferences(runner, queries, clock, ids),
-      inject: [TRANSACTION_RUNNER, WAGERING_QUERIES, CLOCK, ID_GENERATOR],
+        telemetry: Telemetry,
+      ) =>
+        new RetryPendingReferences(
+          runner,
+          queries,
+          clock,
+          ids,
+          ReferenceRetryPolicy.default(),
+          telemetry,
+        ),
+      inject: [TRANSACTION_RUNNER, WAGERING_QUERIES, CLOCK, ID_GENERATOR, TELEMETRY],
     },
     {
       provide: PublishOutboxEvents,
-      useFactory: (outbox: OutboxStore, publisher: EventPublisher, clock: Clock) =>
-        new PublishOutboxEvents(outbox, publisher, clock),
-      inject: [OUTBOX_STORE, EVENT_PUBLISHER, CLOCK],
+      useFactory: (
+        outbox: MikroOrmOutboxStore,
+        publisher: EventPublisher,
+        clock: Clock,
+        telemetry: Telemetry,
+      ) => new PublishOutboxEvents(outbox, publisher, clock, telemetry),
+      inject: [OUTBOX_STORE, EVENT_PUBLISHER, CLOCK, TELEMETRY],
     },
     {
       provide: WagerTransactionConsumer,
-      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction) => {
+      useFactory: (sqs: SQSClient, processWager: ProcessWagerTransaction, telemetry: Telemetry) => {
         const queues = readSqsQueues();
         return new WagerTransactionConsumer(
           sqs,
           processWager,
           defaultConsumerOptions(queues.transactionsQueueUrl, queues.transactionsDlqUrl),
+          telemetry,
         );
       },
-      inject: [SQS_CLIENT, ProcessWagerTransaction],
+      inject: [SQS_CLIENT, ProcessWagerTransaction, TELEMETRY],
     },
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(requestContextMiddleware).forRoutes('*');
+  }
+}

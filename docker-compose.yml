@@ -1,5 +1,41 @@
 name: wagering
 
+x-app-environment: &app-environment
+  DATABASE_URL: postgres://wagering:wagering@postgres:5432/wagering
+  AWS_REGION: us-east-1
+  AWS_ENDPOINT: http://localstack:4566
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  SQS_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+  SQS_TRANSACTIONS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+  SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+  WORKERS_ENABLED: 'true'
+  RUN_MIGRATIONS: 'false'
+  LOG_LEVEL: info
+
+x-app: &app
+  build: .
+  image: wagering-app:local
+  profiles: ['app']
+  environment: *app-environment
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    localstack:
+      condition: service_healthy
+  healthcheck:
+    test:
+      [
+        'CMD',
+        'bun',
+        '-e',
+        "fetch('http://localhost:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+      ]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+  stop_grace_period: 30s
+
 services:
   postgres:
     image: postgres:17-alpine
@@ -36,6 +72,31 @@ services:
       interval: 2s
       timeout: 3s
       retries: 60
+
+  migrate:
+    build: .
+    image: wagering-app:local
+    profiles: ['app']
+    environment: *app-environment
+    command: ['bun', 'src/infrastructure/persistence/migrate.ts', 'up']
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app-1:
+    <<: *app
+    ports:
+      - '3001:3000'
+
+  app-2:
+    <<: *app
+    ports:
+      - '3002:3000'
+
+  app-3:
+    <<: *app
+    ports:
+      - '3003:3000'
 
 volumes:
   pgdata:

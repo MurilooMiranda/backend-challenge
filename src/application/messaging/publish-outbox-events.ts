@@ -1,4 +1,5 @@
 import type { Clock, EventPublisher, OutboxStore } from '../ports';
+import { type Telemetry, noopTelemetry } from '../telemetry';
 
 export interface PublishOutboxEventsResult {
   published: number;
@@ -10,6 +11,7 @@ export class PublishOutboxEvents {
     private readonly outbox: OutboxStore,
     private readonly publisher: EventPublisher,
     private readonly clock: Clock,
+    private readonly telemetry: Telemetry = noopTelemetry,
   ) {}
 
   async execute(batchSize = 25): Promise<PublishOutboxEventsResult> {
@@ -37,6 +39,9 @@ export class PublishOutboxEvents {
       }
     });
 
+    if (published > 0 || failed > 0) {
+      this.telemetry.outboxPublished(published, failed);
+    }
     return { published, failed };
   }
 }

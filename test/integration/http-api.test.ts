@@ -221,3 +221,100 @@ describe('POST /wagering/transactions', () => {
     expect((await get(`/wagering/transactions/${crypto.randomUUID()}`)).status).toBe(404);
   });
 });
+
+describe('GET /wallets/:id/ledger', () => {
+  it('paginates with a stable opaque cursor in insertion order', async () => {
+    const wallet = await createWallet('100.00');
+    for (let i = 0; i < 5; i++) {
+      const payload = wager(wallet, { money: { amount: '1.00', currency: 'BRL' } });
+      await post('/wagering/transactions', payload, keyFor(payload));
+    }
+
+    const first = await get(`/wallets/${wallet.id}/ledger?limit=4`);
+    expect(first.status).toBe(200);
+    expect(first.body.entries).toHaveLength(4);
+    expect(first.body.entries[0].direction).toBe('CREDIT');
+    expect(first.body.nextCursor).toEqual(expect.any(String));
+
+    const second = await get(
+      `/wallets/${wallet.id}/ledger?limit=4&cursor=${first.body.nextCursor}`,
+    );
+    expect(second.body.entries).toHaveLength(2);
+    expect(second.body.nextCursor).toBeNull();
+    expect(second.body.entries.at(-1).balanceAfter).toEqual({ amount: '95.00', currency: 'BRL' });
+
+    const ids = [...first.body.entries, ...second.body.entries].map((e: { id: string }) => e.id);
+    expect(new Set(ids).size).toBe(6);
+  });
+
+  it('400 for an invalid cursor or limit, 404 for an unknown wallet', async () => {
+    const wallet = await createWallet('1.00');
+    expect((await get(`/wallets/${wallet.id}/ledger?cursor=garbage`)).status).toBe(400);
+    expect((await get(`/wallets/${wallet.id}/ledger?limit=0`)).status).toBe(400);
+    expect((await get(`/wallets/${wallet.id}/ledger?limit=abc`)).status).toBe(400);
+    expect((await get(`/wallets/${crypto.randomUUID()}/ledger`)).status).toBe(404);
+  });
+});
+
+describe('POST /wallets/:id/reconciliation', () => {
+  it('reports a consistent wallet', async () => {
+    const wallet = await createWallet('1000.00');
+    const payload = wager(wallet);
+    await post('/wagering/transactions', payload, keyFor(payload));
+
+    const { status, body } = await post(`/wallets/${wallet.id}/reconciliation`, {});
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      walletId: wallet.id,
+      storedBalance: { amount: '975.00', currency: 'BRL' },
+      calculatedBalance: { amount: '975.00', currency: 'BRL' },
+      difference: { amount: '0.00', currency: 'BRL' },
+      consistent: true,
+      checkedEntries: 2,
+    });
+  });
+
+  it('flags a divergence without correcting it and counts it in the metrics', async () => {
+    const wallet = await createWallet('100.00');
+    await orm.em.fork().transactional(async (em) => {
+      await em.execute('SET LOCAL session_replication_role = replica');
+      await em.execute('UPDATE wallets SET balance = 90.00 WHERE id = ?', [wallet.id]);
+    });
+
+    const { body } = await post(`/wallets/${wallet.id}/reconciliation`, {});
+    expect(body.consistent).toBe(false);
+    expect(body.storedBalance.amount).toBe('90.00');
+    expect(body.calculatedBalance.amount).toBe('100.00');
+    expect(body.difference.amount).toBe('-10.00');
+
+    const after = await get(`/wallets/${wallet.id}`);
+    expect(after.body.balance.amount).toBe('90.00');
+
+    const metrics = await (await fetch(`${baseUrl}/metrics`)).text();
+    expect(metrics).toContain('wallet_reconciliations_total{result="divergent"} 1');
+  });
+});
+
+describe('GET /metrics', () => {
+  it('exposes the operational metrics in Prometheus format', async () => {
+    const wallet = await createWallet('100.00');
+    const payload = wager(wallet);
+    await post('/wagering/transactions', payload, keyFor(payload));
+    await post('/wagering/transactions', payload, keyFor(payload));
+
+    const response = await fetch(`${baseUrl}/metrics`);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    for (const name of [
+      'wager_transactions_total{channel="http",kind="BET",status="PROCESSED"}',
+      'wager_duplicates_total{channel="http"}',
+      'wager_processing_duration_seconds_bucket',
+      'wallet_lock_wait_seconds_bucket',
+      'outbox_pending_messages',
+      'outbox_lag_seconds',
+      'sqs_dead_letter_queue_messages',
+    ]) {
+      expect(text).toContain(name);
+    }
+  });
+});

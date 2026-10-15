@@ -13,8 +13,10 @@ import {
   InvalidCommandError,
   WalletNotFoundError,
 } from '@/application/errors';
+import { type ConsumeOutcome, type Telemetry, noopTelemetry } from '@/application/telemetry';
 import type { ProcessWagerTransaction } from '@/application/wagering/process-wager-transaction';
 import { DomainError } from '@/domain/shared/domain-error';
+import { addLogContext, runWithLogContext } from '@/infrastructure/observability/log-context';
 import {
   RequestValidationError,
   type WagerMessage,
@@ -32,7 +34,13 @@ export interface WagerConsumerOptions {
   maxRetrySeconds: number;
 }
 
-export type ConsumeOutcome = 'acked' | 'dead-lettered' | 'retry';
+export type { ConsumeOutcome };
+
+interface HandledMessage {
+  outcome: ConsumeOutcome;
+  messageId: string;
+  failureCode?: string;
+}
 
 export function defaultConsumerOptions(
   queueUrl: string,
@@ -70,6 +78,7 @@ export class WagerTransactionConsumer {
     private readonly sqs: SQSClient,
     private readonly processWager: ProcessWagerTransaction,
     private readonly options: WagerConsumerOptions,
+    private readonly telemetry: Telemetry = noopTelemetry,
   ) {}
 
   start(): void {
@@ -112,34 +121,52 @@ export class WagerTransactionConsumer {
   }
 
   async consume(message: Message): Promise<ConsumeOutcome> {
+    return runWithLogContext({ sqsMessageId: message.MessageId }, async () => {
+      const handled = await this.handle(message);
+      this.telemetry.messageConsumed(handled);
+      return handled.outcome;
+    });
+  }
+
+  private async handle(message: Message): Promise<HandledMessage> {
     let parsed: WagerMessage;
     try {
       parsed = parseBody(wagerMessageSchema, JSON.parse(message.Body ?? ''));
     } catch (error) {
       await this.deadLetter(message, 'INVALID_MESSAGE', (error as Error).message);
-      return 'dead-lettered';
+      return {
+        outcome: 'dead-lettered',
+        messageId: message.MessageId ?? 'unknown',
+        failureCode: 'INVALID_MESSAGE',
+      };
     }
 
+    addLogContext({
+      messageId: parsed.messageId,
+      correlationId: parsed.messageId,
+      walletId: parsed.data.walletId,
+      providerId: parsed.data.providerId,
+    });
+
     try {
-      await this.processWager.execute({
+      const result = await this.processWager.execute({
         ...parsed.data,
         correlationId: parsed.messageId,
         causationId: parsed.messageId,
         inbox: { consumerName: this.options.consumerName, messageId: parsed.messageId },
+        channel: 'sqs',
       });
+      addLogContext({ transactionId: result.transactionId });
       await this.ack(message);
-      return 'acked';
+      return { outcome: 'acked', messageId: parsed.messageId };
     } catch (error) {
+      const code = (error as { code?: string }).code ?? 'UNKNOWN';
       if (isPermanentFailure(error)) {
-        const code = (error as { code?: string }).code ?? 'PERMANENT_FAILURE';
         await this.deadLetter(message, code, (error as Error).message);
-        return 'dead-lettered';
+        return { outcome: 'dead-lettered', messageId: parsed.messageId, failureCode: code };
       }
-      this.logger.warn(
-        `transient failure for message ${parsed.messageId}: ${(error as Error).message}`,
-      );
       await this.delay(message);
-      return 'retry';
+      return { outcome: 'retry', messageId: parsed.messageId, failureCode: code };
     }
   }
 

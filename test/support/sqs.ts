@@ -1,5 +1,6 @@
 import {
   CreateQueueCommand,
+  DeleteMessageBatchCommand,
   DeleteQueueCommand,
   GetQueueAttributesCommand,
   type Message,
@@ -82,9 +83,9 @@ export async function sendRaw(
   );
 }
 
-export async function drain(sqs: SQSClient, queueUrl: string): Promise<Message[]> {
+export async function drain(sqs: SQSClient, queueUrl: string, maxRounds = 10): Promise<Message[]> {
   const received: Message[] = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < maxRounds; i++) {
     const response = await sqs.send(
       new ReceiveMessageCommand({
         QueueUrl: queueUrl,
@@ -100,6 +101,15 @@ export async function drain(sqs: SQSClient, queueUrl: string): Promise<Message[]
       break;
     }
     received.push(...messages);
+    await sqs.send(
+      new DeleteMessageBatchCommand({
+        QueueUrl: queueUrl,
+        Entries: messages.map((message, index) => ({
+          Id: String(index),
+          ReceiptHandle: message.ReceiptHandle,
+        })),
+      }),
+    );
   }
   return received;
 }

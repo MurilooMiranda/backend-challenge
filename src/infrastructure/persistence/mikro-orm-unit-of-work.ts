@@ -1,6 +1,7 @@
 import { LockMode } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { WageringUnitOfWork } from '@/application/ports';
+import { type Telemetry, noopTelemetry } from '@/application/telemetry';
 import type { WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
 import type { InboxMessage } from '@/domain/messaging/inbox-message';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
@@ -31,14 +32,19 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   private readonly lockedWallets = new Map<string, WalletRecord>();
   private readonly loadedTransactions = new Map<string, WagerTransactionRecord>();
 
-  constructor(private readonly em: EntityManager) {}
+  constructor(
+    private readonly em: EntityManager,
+    private readonly telemetry: Telemetry = noopTelemetry,
+  ) {}
 
   async lockWallet(walletId: string): Promise<Wallet | null> {
+    const startedAt = performance.now();
     const record = await this.em.findOne(
       WalletRecord,
       { id: walletId },
       { lockMode: LockMode.PESSIMISTIC_WRITE },
     );
+    this.telemetry.walletLockWait((performance.now() - startedAt) / 1000);
     if (!record) {
       return null;
     }

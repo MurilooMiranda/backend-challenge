@@ -17,6 +17,7 @@ import { ProcessWagerTransaction } from '@/application/wagering/process-wager-tr
 import { type TransactionView, toTransactionView } from '@/application/wagering/transaction-view';
 import type { WagerTransactionResult } from '@/application/wagering/wager-transaction-result';
 import { WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
+import { addLogContext } from '@/infrastructure/observability/log-context';
 import { AuthGuard } from './auth.guard';
 import { CORRELATION_HEADER, resolveCorrelationId } from './correlation';
 import { RequestValidationError, parseBody, wagerTransactionSchema } from './schemas';
@@ -45,12 +46,15 @@ export class WageringController {
     }
     const input = parseBody(wagerTransactionSchema, body);
     const correlationId = resolveCorrelationId(correlationHeader);
+    addLogContext({ walletId: input.walletId, providerId: input.providerId });
 
     const result = await this.processWager.execute({
       ...input,
       idempotencyKey: idempotencyKey.trim(),
       correlationId,
+      channel: 'http',
     });
+    addLogContext({ transactionId: result.transactionId });
 
     response.setHeader(CORRELATION_HEADER, correlationId);
     response.status(statusFor(result));

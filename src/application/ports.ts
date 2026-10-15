@@ -1,6 +1,7 @@
 import type { WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
 import type { InboxMessage } from '@/domain/messaging/inbox-message';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
+import type { Money } from '@/domain/money/money';
 import type { WagerTransaction } from '@/domain/wagering/wager-transaction';
 import type { Wallet } from '@/domain/wallet/wallet';
 
@@ -47,6 +48,24 @@ export interface WageringQueries {
     externalTransactionId: string,
   ): Promise<WagerTransaction | null>;
   findDuePendingReferences(now: Date, limit: number): Promise<PendingReferenceRef[]>;
+  findLedgerPage(
+    walletId: string,
+    afterSequence: string | null,
+    limit: number,
+  ): Promise<LedgerPageRow[]>;
+  reconciliationSnapshot(walletId: string): Promise<ReconciliationSnapshot | null>;
+}
+
+export interface LedgerPageRow {
+  sequence: string;
+  entry: WalletLedgerEntry;
+}
+
+export interface ReconciliationSnapshot {
+  wallet: Wallet;
+  credits: Money;
+  debits: Money;
+  entries: number;
 }
 
 export interface PendingReferenceRef {

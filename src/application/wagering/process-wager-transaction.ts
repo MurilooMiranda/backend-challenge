@@ -10,6 +10,7 @@ import {
   WalletNotFoundError,
 } from '../errors';
 import type { Clock, IdGenerator, TransactionRunner, WageringUnitOfWork } from '../ports';
+import { type Channel, type Telemetry, noopTelemetry } from '../telemetry';
 import { computeWagerPayloadHash } from './payload-hash';
 import { settleAndStage } from './settle-and-stage';
 import { type WagerTransactionResult, toWagerTransactionResult } from './wager-transaction-result';
@@ -33,6 +34,7 @@ export interface ProcessWagerTransactionCommand {
   correlationId: string;
   causationId?: string | undefined;
   inbox?: InboxReference | undefined;
+  channel?: Channel | undefined;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -43,20 +45,37 @@ export class ProcessWagerTransaction {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     private readonly retryPolicy: ReferenceRetryPolicy = ReferenceRetryPolicy.default(),
+    private readonly telemetry: Telemetry = noopTelemetry,
   ) {}
 
   async execute(command: ProcessWagerTransactionCommand): Promise<WagerTransactionResult> {
     if (typeof command.idempotencyKey !== 'string' || command.idempotencyKey.trim() === '') {
       throw new InvalidCommandError('idempotency key is required');
     }
+    const startedAt = performance.now();
     const money = Money.from(command.money);
     const payloadHash = computeWagerPayloadHash({ ...command, money: money.toJSON() });
 
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.transactions.run((uow) => this.process(uow, command, money, payloadHash));
+        const result = await this.transactions.run((uow) =>
+          this.process(uow, command, money, payloadHash),
+        );
+        this.telemetry.transactionSettled({
+          channel: command.channel ?? 'http',
+          transactionId: result.transactionId,
+          walletId: command.walletId,
+          providerId: command.providerId,
+          kind: command.kind,
+          status: result.status,
+          failureCode: result.failureCode,
+          idempotentReplay: result.idempotentReplay,
+          durationSeconds: (performance.now() - startedAt) / 1000,
+        });
+        return result;
       } catch (error) {
         if (error instanceof UniqueViolationError && attempt < MAX_ATTEMPTS) {
+          this.telemetry.lockConflict(error.constraint ?? 'unique_violation');
           continue;
         }
         throw error;
