@@ -23,6 +23,14 @@ export class IdempotencyConflictError extends ApplicationError {
   }
 }
 
+export class InboxPayloadMismatchError extends ApplicationError {
+  readonly code = 'INBOX_PAYLOAD_MISMATCH';
+
+  constructor(consumerName: string, messageId: string) {
+    super(`Message ${messageId} was already consumed by ${consumerName} with a different payload`);
+  }
+}
+
 export class WalletNotFoundError extends ApplicationError {
   readonly code = 'WALLET_NOT_FOUND';
 

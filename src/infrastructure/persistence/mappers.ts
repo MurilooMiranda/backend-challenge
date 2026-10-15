@@ -1,5 +1,6 @@
 import { type LedgerDirection, WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
-import type { OutboxMessage } from '@/domain/messaging/outbox-message';
+import { InboxMessage } from '@/domain/messaging/inbox-message';
+import { OutboxMessage } from '@/domain/messaging/outbox-message';
 import { Money } from '@/domain/money/money';
 import type { FailureCode } from '@/domain/wagering/failure-code';
 import {
@@ -9,6 +10,7 @@ import {
 } from '@/domain/wagering/wager-transaction';
 import { Wallet } from '@/domain/wallet/wallet';
 import type {
+  InboxRecord,
   LedgerEntryRecord,
   OutboxRecord,
   WagerTransactionRecord,
@@ -132,6 +134,61 @@ export function ledgerEntryToRecordData(entry: WalletLedgerEntry): LedgerEntryRe
     balanceAfter: entry.balanceAfter.toJSON().amount,
     createdAt: entry.createdAt,
   };
+}
+
+export function applyTransactionToRecord(
+  tx: WagerTransaction,
+  record: WagerTransactionRecord,
+): void {
+  const data = transactionToRecordData(tx);
+  record.status = data.status;
+  record.referenceTransactionId = data.referenceTransactionId ?? null;
+  record.failureCode = data.failureCode ?? null;
+  record.resultingBalance = data.resultingBalance ?? null;
+  record.referenceAttempts = data.referenceAttempts;
+  record.nextReferenceCheckAt = data.nextReferenceCheckAt ?? null;
+  record.processedAt = data.processedAt ?? null;
+}
+
+export function inboxToDomain(record: InboxRecord): InboxMessage {
+  return InboxMessage.rehydrate({
+    consumerName: record.consumerName,
+    messageId: record.messageId,
+    payloadHash: record.payloadHash,
+    receivedAt: record.receivedAt,
+    ...(record.processedAt != null ? { processedAt: record.processedAt } : {}),
+  });
+}
+
+export function inboxToRecordData(message: InboxMessage): InboxRecord {
+  return {
+    consumerName: message.consumerName,
+    messageId: message.messageId,
+    payloadHash: message.payloadHash,
+    receivedAt: message.receivedAt,
+    processedAt: message.processedAt ?? null,
+  };
+}
+
+export function outboxToDomain(record: OutboxRecord): OutboxMessage {
+  return OutboxMessage.rehydrate({
+    id: record.id,
+    aggregateId: record.aggregateId,
+    eventType: record.eventType,
+    payload: record.payload,
+    occurredAt: record.occurredAt,
+    attempts: record.attempts,
+    nextAttemptAt: record.nextAttemptAt,
+    ...(record.publishedAt != null ? { publishedAt: record.publishedAt } : {}),
+    ...(record.lastError != null ? { lastError: record.lastError } : {}),
+  });
+}
+
+export function applyOutboxToRecord(message: OutboxMessage, record: OutboxRecord): void {
+  record.attempts = message.attempts;
+  record.nextAttemptAt = message.nextAttemptAt;
+  record.publishedAt = message.publishedAt ?? null;
+  record.lastError = message.lastError ?? null;
 }
 
 export function outboxToRecordData(message: OutboxMessage): OutboxRecord {

@@ -33,6 +33,15 @@ export const wagerTransactionSchema = z.object({
   referenceExternalTransactionId: requiredText.optional(),
 });
 
+export const wagerMessageSchema = z.object({
+  messageId: requiredText,
+  type: z.literal('WagerTransactionRequested'),
+  occurredAt: z.iso.datetime(),
+  data: wagerTransactionSchema.extend({ idempotencyKey: requiredText }),
+});
+
+export type WagerMessage = z.infer<typeof wagerMessageSchema>;
+
 export function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) {

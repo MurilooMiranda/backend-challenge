@@ -1,5 +1,6 @@
 import type { MikroORM } from '@mikro-orm/postgresql';
-import type { WageringQueries } from '@/application/ports';
+import type { PendingReferenceRef, WageringQueries } from '@/application/ports';
+import { WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import type { WagerTransaction } from '@/domain/wagering/wager-transaction';
 import type { Wallet } from '@/domain/wallet/wallet';
 import { transactionToDomain, walletToDomain } from './mappers';
@@ -39,6 +40,20 @@ export class MikroOrmWageringQueries implements WageringQueries {
       this.orm.em.fork().findOne(WagerTransactionRecord, { providerId, externalTransactionId }),
     );
     return record ? transactionToDomain(record) : null;
+  }
+
+  async findDuePendingReferences(now: Date, limit: number): Promise<PendingReferenceRef[]> {
+    const records = await this.query(() =>
+      this.orm.em.fork().find(
+        WagerTransactionRecord,
+        {
+          status: WagerTransactionStatus.PendingReference,
+          nextReferenceCheckAt: { $lte: now },
+        },
+        { orderBy: { nextReferenceCheckAt: 'asc' }, limit, fields: ['id', 'walletId'] },
+      ),
+    );
+    return records.map((record) => ({ transactionId: record.id, walletId: record.walletId }));
   }
 
   private async query<T>(run: () => Promise<T>): Promise<T> {

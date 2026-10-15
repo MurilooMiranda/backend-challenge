@@ -13,6 +13,7 @@ let baseUrl: string;
 beforeAll(async () => {
   orm = await createTestOrm();
   process.env.DATABASE_URL = TEST_DATABASE_URL;
+  process.env.WORKERS_ENABLED = 'false';
   app = await NestFactory.create(AppModule, { logger: false });
   await app.listen(0);
   baseUrl = (await app.getUrl()).replace('[::1]', 'localhost');

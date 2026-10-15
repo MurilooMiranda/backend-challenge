@@ -2,12 +2,16 @@ import { LockMode } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { WageringUnitOfWork } from '@/application/ports';
 import type { WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
+import type { InboxMessage } from '@/domain/messaging/inbox-message';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
 import { WagerTransactionKind, WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import type { WagerTransaction } from '@/domain/wagering/wager-transaction';
 import type { Wallet } from '@/domain/wallet/wallet';
 import {
+  applyTransactionToRecord,
   applyWalletToRecord,
+  inboxToDomain,
+  inboxToRecordData,
   ledgerEntryToRecordData,
   outboxToRecordData,
   transactionToDomain,
@@ -15,10 +19,17 @@ import {
   walletToDomain,
   walletToRecordData,
 } from './mappers';
-import { LedgerEntryRecord, OutboxRecord, WagerTransactionRecord, WalletRecord } from './records';
+import {
+  InboxRecord,
+  LedgerEntryRecord,
+  OutboxRecord,
+  WagerTransactionRecord,
+  WalletRecord,
+} from './records';
 
 export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   private readonly lockedWallets = new Map<string, WalletRecord>();
+  private readonly loadedTransactions = new Map<string, WagerTransactionRecord>();
 
   constructor(private readonly em: EntityManager) {}
 
@@ -43,7 +54,12 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
     const records = await this.em.find(WagerTransactionRecord, {
       $or: [{ idempotencyKey }, { providerId, externalTransactionId }],
     });
-    return records.map(transactionToDomain);
+    return records.map((record) => this.track(record));
+  }
+
+  async findTransactionById(transactionId: string): Promise<WagerTransaction | null> {
+    const record = await this.em.findOne(WagerTransactionRecord, { id: transactionId });
+    return record ? this.track(record) : null;
   }
 
   async findTransactionByExternalId(
@@ -54,7 +70,7 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
       providerId,
       externalTransactionId,
     });
-    return record ? transactionToDomain(record) : null;
+    return record ? this.track(record) : null;
   }
 
   async hasProcessedReversal(referenceTransactionId: string): Promise<boolean> {
@@ -64,6 +80,11 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
       status: WagerTransactionStatus.Processed,
     });
     return count > 0;
+  }
+
+  async findInboxMessage(consumerName: string, messageId: string): Promise<InboxMessage | null> {
+    const record = await this.em.findOne(InboxRecord, { consumerName, messageId });
+    return record ? inboxToDomain(record) : null;
   }
 
   addWallet(wallet: Wallet): void {
@@ -82,6 +103,14 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
     this.em.create(WagerTransactionRecord, transactionToRecordData(tx));
   }
 
+  saveTransaction(tx: WagerTransaction): void {
+    const record = this.loadedTransactions.get(tx.id);
+    if (!record) {
+      throw new Error(`Transaction ${tx.id} must be loaded before being saved`);
+    }
+    applyTransactionToRecord(tx, record);
+  }
+
   addLedgerEntry(entry: WalletLedgerEntry): void {
     this.em.create(LedgerEntryRecord, ledgerEntryToRecordData(entry));
   }
@@ -90,5 +119,14 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
     for (const message of messages) {
       this.em.create(OutboxRecord, outboxToRecordData(message));
     }
+  }
+
+  addInboxMessage(message: InboxMessage): void {
+    this.em.create(InboxRecord, inboxToRecordData(message));
+  }
+
+  private track(record: WagerTransactionRecord): WagerTransaction {
+    this.loadedTransactions.set(record.id, record);
+    return transactionToDomain(record);
   }
 }

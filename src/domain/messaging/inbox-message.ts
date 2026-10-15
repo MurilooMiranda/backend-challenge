@@ -1,0 +1,56 @@
+export interface ReceiveInboxProps {
+  messageId: string;
+  consumerName: string;
+  payloadHash: string;
+  receivedAt: Date;
+}
+
+export interface InboxMessageState extends ReceiveInboxProps {
+  processedAt?: Date;
+}
+
+export class InboxMessage {
+  readonly messageId: string;
+  readonly consumerName: string;
+  readonly payloadHash: string;
+  readonly receivedAt: Date;
+  private _processedAt: Date | undefined;
+
+  private constructor(state: InboxMessageState) {
+    this.messageId = state.messageId;
+    this.consumerName = state.consumerName;
+    this.payloadHash = state.payloadHash;
+    this.receivedAt = state.receivedAt;
+    this._processedAt = state.processedAt;
+  }
+
+  static receive(props: ReceiveInboxProps): InboxMessage {
+    if (!props.messageId?.trim() || !props.consumerName?.trim()) {
+      throw new Error('Inbox message requires messageId and consumerName');
+    }
+    return new InboxMessage({ ...props });
+  }
+
+  static rehydrate(state: InboxMessageState): InboxMessage {
+    return new InboxMessage(state);
+  }
+
+  get processedAt(): Date | undefined {
+    return this._processedAt;
+  }
+
+  isProcessed(): boolean {
+    return this._processedAt !== undefined;
+  }
+
+  matchesPayload(payloadHash: string): boolean {
+    return this.payloadHash === payloadHash;
+  }
+
+  markProcessed(at: Date): void {
+    if (this.isProcessed()) {
+      return;
+    }
+    this._processedAt = at;
+  }
+}

@@ -1,17 +1,23 @@
+import { InboxMessage } from '@/domain/messaging/inbox-message';
 import { type MoneyProps, Money } from '@/domain/money/money';
 import { ReferenceRetryPolicy } from '@/domain/wagering/reference-retry-policy';
-import { WagerSettlement } from '@/domain/wagering/wager-settlement';
 import { WagerTransaction, type WagerTransactionKind } from '@/domain/wagering/wager-transaction';
 import {
   IdempotencyConflictError,
+  InboxPayloadMismatchError,
   InvalidCommandError,
   UniqueViolationError,
   WalletNotFoundError,
 } from '../errors';
 import type { Clock, IdGenerator, TransactionRunner, WageringUnitOfWork } from '../ports';
 import { computeWagerPayloadHash } from './payload-hash';
-import { settlementEvents } from './wager-events';
+import { settleAndStage } from './settle-and-stage';
 import { type WagerTransactionResult, toWagerTransactionResult } from './wager-transaction-result';
+
+export interface InboxReference {
+  consumerName: string;
+  messageId: string;
+}
 
 export interface ProcessWagerTransactionCommand {
   idempotencyKey: string;
@@ -26,6 +32,7 @@ export interface ProcessWagerTransactionCommand {
   referenceExternalTransactionId?: string | undefined;
   correlationId: string;
   causationId?: string | undefined;
+  inbox?: InboxReference | undefined;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -63,8 +70,13 @@ export class ProcessWagerTransaction {
     money: Money,
     payloadHash: string,
   ): Promise<WagerTransactionResult> {
+    const alreadyConsumed = await this.isAlreadyConsumed(uow, command, payloadHash);
+
     const earlyReplay = await this.findReplay(uow, command, payloadHash);
     if (earlyReplay) {
+      if (!alreadyConsumed) {
+        this.recordInbox(uow, command, payloadHash);
+      }
       return earlyReplay;
     }
 
@@ -75,6 +87,9 @@ export class ProcessWagerTransaction {
 
     const replay = await this.findReplay(uow, command, payloadHash);
     if (replay) {
+      if (!alreadyConsumed) {
+        this.recordInbox(uow, command, payloadHash);
+      }
       return replay;
     }
 
@@ -97,41 +112,54 @@ export class ProcessWagerTransaction {
       createdAt: now,
     });
 
-    const reference =
-      tx.requiresReference() && tx.referenceExternalTransactionId
-        ? ((await uow.findTransactionByExternalId(
-            tx.providerId,
-            tx.referenceExternalTransactionId,
-          )) ?? undefined)
-        : undefined;
-    const referenceAlreadyReversed = reference
-      ? await uow.hasProcessedReversal(reference.id)
-      : false;
-
-    const { entry } = WagerSettlement.settle(tx, {
-      wallet,
-      ...(reference ? { reference } : {}),
-      referenceAlreadyReversed,
-      entryId: this.ids.next(),
-      at: now,
+    await settleAndStage(uow, tx, wallet, {
+      ids: this.ids,
       retryPolicy: this.retryPolicy,
+      at: now,
+      correlationId: command.correlationId,
+      causationId: command.causationId,
+      isNew: true,
     });
-
-    uow.addTransaction(tx);
-    if (entry) {
-      uow.addLedgerEntry(entry);
-      uow.saveWallet(wallet);
-    }
-    uow.addOutboxMessages(
-      settlementEvents(tx, wallet, entry, () => ({
-        eventId: this.ids.next(),
-        correlationId: command.correlationId,
-        ...(command.causationId !== undefined ? { causationId: command.causationId } : {}),
-        occurredAt: now,
-      })),
-    );
+    this.recordInbox(uow, command, payloadHash);
 
     return toWagerTransactionResult(tx, false);
+  }
+
+  private async isAlreadyConsumed(
+    uow: WageringUnitOfWork,
+    command: ProcessWagerTransactionCommand,
+    payloadHash: string,
+  ): Promise<boolean> {
+    if (!command.inbox) {
+      return false;
+    }
+    const seen = await uow.findInboxMessage(command.inbox.consumerName, command.inbox.messageId);
+    if (!seen) {
+      return false;
+    }
+    if (!seen.matchesPayload(payloadHash)) {
+      throw new InboxPayloadMismatchError(command.inbox.consumerName, command.inbox.messageId);
+    }
+    return true;
+  }
+
+  private recordInbox(
+    uow: WageringUnitOfWork,
+    command: ProcessWagerTransactionCommand,
+    payloadHash: string,
+  ): void {
+    if (!command.inbox) {
+      return;
+    }
+    const now = this.clock.now();
+    const message = InboxMessage.receive({
+      consumerName: command.inbox.consumerName,
+      messageId: command.inbox.messageId,
+      payloadHash,
+      receivedAt: now,
+    });
+    message.markProcessed(now);
+    uow.addInboxMessage(message);
   }
 
   private async findReplay(

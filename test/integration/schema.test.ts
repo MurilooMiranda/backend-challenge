@@ -94,7 +94,7 @@ describe('migrations', () => {
     };
 
     expect(await countTables()).toBe(5);
-    await orm.migrator.down();
+    await orm.migrator.down({ to: 0 });
     expect(await countTables()).toBe(0);
     await orm.migrator.up();
     expect(await countTables()).toBe(5);
