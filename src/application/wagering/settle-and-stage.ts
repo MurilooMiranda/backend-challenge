@@ -3,6 +3,7 @@ import { WagerSettlement } from '@/domain/wagering/wager-settlement';
 import { type WagerTransaction, WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import type { Wallet } from '@/domain/wallet/wallet';
 import type { IdGenerator, WageringUnitOfWork } from '../ports';
+import { stageJournal } from '../ledger/stage-journal';
 import { settlementEvents } from './wager-events';
 
 export interface SettleAndStageOptions {
@@ -48,6 +49,7 @@ export async function settleAndStage(
   if (entry) {
     uow.addLedgerEntry(entry);
     uow.saveWallet(wallet);
+    await stageJournal(uow, entry, tx.kind, tx.providerId, options.ids);
   }
 
   const stillWaiting =

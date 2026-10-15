@@ -227,3 +227,31 @@ describe('three application instances sharing Postgres and SQS', () => {
     expect(eventIds.length).toBe(total);
   });
 });
+
+describe('double-entry books after all the concurrent traffic', () => {
+  it('the trial balance is balanced and every wallet reconciles against both ledgers', async () => {
+    const response = await fetch(`${instanceAt(2).url}/ledger/trial-balance?currency=BRL`);
+    const books = (await response.json()) as {
+      balanced: boolean;
+      unbalancedJournalEntries: number;
+      totalDebits: unknown;
+      totalCredits: unknown;
+    };
+    expect(books.balanced).toBe(true);
+    expect(books.unbalancedJournalEntries).toBe(0);
+    expect(books.totalDebits).toEqual(books.totalCredits);
+
+    const [row] = await orm.em.execute<{ divergent: number }[]>(
+      `SELECT count(*)::int AS divergent
+         FROM wallets w
+         LEFT JOIN ledger_accounts a ON a.wallet_id = w.id
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(sum(CASE WHEN p.direction = 'CREDIT' THEN p.amount ELSE -p.amount END), 0) AS balance
+             FROM journal_postings p
+            WHERE p.account_code = a.code
+         ) j ON true
+        WHERE w.balance <> COALESCE(j.balance, 0)`,
+    );
+    expect(row!.divergent).toBe(0);
+  });
+});

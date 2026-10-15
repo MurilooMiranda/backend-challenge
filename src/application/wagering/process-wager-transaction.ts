@@ -1,3 +1,4 @@
+import { LedgerAccount } from '@/domain/ledger/ledger-account';
 import { InboxMessage } from '@/domain/messaging/inbox-message';
 import { type MoneyProps, Money } from '@/domain/money/money';
 import { ReferenceRetryPolicy } from '@/domain/wagering/reference-retry-policy';
@@ -98,6 +99,8 @@ export class ProcessWagerTransaction {
       }
       return earlyReplay;
     }
+
+    await uow.ensureAccounts([LedgerAccount.house(command.providerId, money.currency)]);
 
     const wallet = await uow.lockWallet(command.walletId);
     if (!wallet) {

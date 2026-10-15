@@ -269,6 +269,7 @@ describe('POST /wallets/:id/reconciliation', () => {
       storedBalance: { amount: '975.00', currency: 'BRL' },
       calculatedBalance: { amount: '975.00', currency: 'BRL' },
       difference: { amount: '0.00', currency: 'BRL' },
+      journalBalance: { amount: '975.00', currency: 'BRL' },
       consistent: true,
       checkedEntries: 2,
     });
@@ -286,12 +287,51 @@ describe('POST /wallets/:id/reconciliation', () => {
     expect(body.storedBalance.amount).toBe('90.00');
     expect(body.calculatedBalance.amount).toBe('100.00');
     expect(body.difference.amount).toBe('-10.00');
+    expect(body.journalBalance.amount).toBe('100.00');
 
     const after = await get(`/wallets/${wallet.id}`);
     expect(after.body.balance.amount).toBe('90.00');
 
     const metrics = await (await fetch(`${baseUrl}/metrics`)).text();
     expect(metrics).toContain('wallet_reconciliations_total{result="divergent"} 1');
+  });
+});
+
+describe('GET /ledger/trial-balance', () => {
+  it('debits equal credits across player, house and funding accounts', async () => {
+    const wallet = await createWallet('100.00');
+    const bet = wager(wallet, { money: { amount: '30.00', currency: 'BRL' } });
+    await post('/wagering/transactions', bet, keyFor(bet));
+    const win = wager(wallet, { kind: 'WIN', money: { amount: '50.00', currency: 'BRL' } });
+    await post('/wagering/transactions', win, keyFor(win));
+    const refund = wager(wallet, {
+      kind: 'REFUND',
+      money: { amount: '30.00', currency: 'BRL' },
+      referenceExternalTransactionId: bet.externalTransactionId,
+    });
+    await post('/wagering/transactions', refund, keyFor(refund));
+
+    const { status, body } = await get('/ledger/trial-balance?currency=BRL');
+    expect(status).toBe(200);
+    expect(body.balanced).toBe(true);
+    expect(body.unbalancedJournalEntries).toBe(0);
+    expect(body.journalEntries).toBe(4);
+    expect(body.totalDebits).toEqual(body.totalCredits);
+    expect(body.playerWallets.balance).toEqual({ amount: '150.00', currency: 'BRL' });
+    expect(body.accounts).toEqual([
+      expect.objectContaining({
+        code: 'FUNDING:BRL',
+        balance: { amount: '-100.00', currency: 'BRL' },
+      }),
+      expect.objectContaining({
+        code: 'HOUSE:provider-a:BRL',
+        balance: { amount: '-50.00', currency: 'BRL' },
+      }),
+    ]);
+  });
+
+  it('400 for an invalid currency', async () => {
+    expect((await get('/ledger/trial-balance?currency=brl')).status).toBe(400);
   });
 });
 

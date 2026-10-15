@@ -41,6 +41,11 @@ export interface LoadReport {
     divergentWallets: number;
     ledgerEntries: number;
     transactions: number;
+    journalEntries: number;
+    unbalancedJournalEntries: number;
+    journalDivergentWallets: number;
+    journalDebits: string;
+    journalCredits: string;
     statuses: { status: string; failure_code: string | null; n: number }[];
   };
 }
@@ -138,6 +143,10 @@ ${latencyRow('replays', http.replayLatency)}
 | Wallets com saldo diferente do ledger reconstruído | **${correctness.divergentWallets}** |
 | Lançamentos no ledger | ${correctness.ledgerEntries} |
 | Transações | ${correctness.transactions} |
+| Lançamentos contábeis (partidas dobradas) | ${correctness.journalEntries} |
+| Lançamentos contábeis desbalanceados | **${correctness.unbalancedJournalEntries}** |
+| Wallets com saldo diferente da conta contábil do jogador | **${correctness.journalDivergentWallets}** |
+| Total de débitos / créditos no razão | ${correctness.journalDebits} / ${correctness.journalCredits} |
 
 | Status | failureCode | Quantidade |
 |---|---|---|

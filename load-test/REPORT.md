@@ -50,6 +50,8 @@ Definições:
 
 ## Resultados
 
+As tabelas desta seção foram medidas **antes** do ledger de partidas dobradas. O custo que ele acrescentou está em [Custo das partidas dobradas](#custo-das-partidas-dobradas), e o `bun run test:load` atual já inclui o razão contábil.
+
 ### Configuração padrão (4 execuções)
 
 | Execução | Throughput | p50    | p95    | p99    | Erros | Espera de lock p95 / p99 | Outbox lag máx. | SQS       | Wallets divergentes |
@@ -106,6 +108,24 @@ A primeira execução expôs um problema real: **a outbox não acompanhava a car
 2. **Ordem por wallet limitando a vazão.** A garantia de ordem por wallet deixava sair só o evento mais antigo de cada wallet por ciclo. As wallets quentes, com cerca de 28 eventos/s cada, ficavam para trás indefinidamente. A solução preserva a garantia: o publisher reivindica a wallet travando o evento mais antigo dela (`FOR UPDATE SKIP LOCKED`) e, na mesma transação, leva os próximos até 20 eventos daquela wallet, em ordem. Nenhum outro publisher consegue pegá-los enquanto o primeiro estiver travado. Os testes `competing publishers keep per-wallet order...` e `a partially failed batch republishes...` cobrem esse comportamento.
 3. **Teto de envios do SQS.** Um micro-benchmark direto no LocalStack mostrou cerca de 545 envios avulsos/s contra cerca de 4.000/s em `SendMessageBatch`. Com a publicação em lote (o FIFO preserva a ordem por grupo dentro do lote), o lag caiu de **27 s para menos de 1 s**. Se uma entrada do lote falha, os eventos seguintes da mesma wallet ficam pendentes e saem depois dela.
 4. **Consumo SQS.** Cada instância tinha um único loop de long polling, com no máximo 10 mensagens em processamento. Com 4 loops por instância (seguro porque o FIFO nunca entrega o mesmo grupo a dois consumidores ao mesmo tempo), o consumo subiu de cerca de 100 para cerca de 160 msg/s.
+
+## Custo das partidas dobradas
+
+Com o razão contábil, cada transação que move saldo passa a gravar também um lançamento contábil e dois postings, garantir que as contas existem e executar três verificações deferidas no COMMIT (lançamento balanceado e vínculo nos dois sentidos entre o ledger da wallet e o razão). Configuração padrão:
+
+| Versão                                                           | Execuções | Throughput    | p50        | p95        | p99        | Espera de lock p95 / p99 |
+| ---------------------------------------------------------------- | --------- | ------------- | ---------- | ---------- | ---------- | ------------------------ |
+| Sem partidas dobradas                                            | 4         | 237–287 req/s | 152–165 ms | 292–430 ms | 436–617 ms | 126–156 / 281–445 ms     |
+| Partidas dobradas, contas garantidas dentro da seção crítica     | 2         | 188–213 req/s | 197–215 ms | 457–524 ms | 727–772 ms | 208–215 / 486–550 ms     |
+| Partidas dobradas, contas garantidas **antes** do lock da wallet | 3         | 182–202 req/s | 216–242 ms | 426–471 ms | 648–786 ms | 166–178 / 436–503 ms     |
+
+Em todas as 5 execuções com o razão contábil: **0 erros, 0 wallets divergentes, 0 lançamentos contábeis desbalanceados e 0 wallets com saldo diferente da conta contábil do jogador**. Débitos e créditos totais do razão fecharam nos centavos (por exemplo, 204.052.439,11 / 204.052.439,11).
+
+Leitura dos números:
+
+- O razão contábil custa **cerca de 25–30% do throughput** nesta máquina. O custo é trabalho de banco por transação (mais statements e mais verificações no COMMIT) numa CPU já saturada.
+- Mover o upsert das contas para **antes** de travar a wallet encurtou a seção crítica: a espera p95 pelo lock caiu de cerca de 210 ms para cerca de 170 ms. O throughput não mudou, o que confirma que o limite é o trabalho total, e não a disputa pelo lock.
+- As contas da casa **não têm saldo materializado**. Se tivessem, toda aposta de um provedor precisaria travar a mesma linha: um lock global, que transformaria o provedor inteiro em uma wallet quente. O saldo delas é calculado no balancete.
 
 ## Anomalia observada
 

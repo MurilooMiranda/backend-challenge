@@ -2,7 +2,10 @@ import { LockMode } from '@mikro-orm/core';
 import type { EntityManager } from '@mikro-orm/postgresql';
 import type { WageringUnitOfWork } from '@/application/ports';
 import { type Telemetry, noopTelemetry } from '@/application/telemetry';
+import type { JournalEntry } from '@/domain/ledger/journal-entry';
+import type { LedgerAccount } from '@/domain/ledger/ledger-account';
 import type { WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
+import { randomUUIDv7 } from 'bun';
 import type { InboxMessage } from '@/domain/messaging/inbox-message';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
 import { WagerTransactionKind, WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
@@ -22,6 +25,8 @@ import {
 } from './mappers';
 import {
   InboxRecord,
+  JournalEntryRecord,
+  JournalPostingRecord,
   LedgerEntryRecord,
   OutboxRecord,
   WagerTransactionRecord,
@@ -31,6 +36,7 @@ import {
 export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   private readonly lockedWallets = new Map<string, WalletRecord>();
   private readonly loadedTransactions = new Map<string, WagerTransactionRecord>();
+  private readonly ensuredAccounts = new Set<string>();
 
   constructor(
     private readonly em: EntityManager,
@@ -124,6 +130,47 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   addOutboxMessages(messages: OutboxMessage[]): void {
     for (const message of messages) {
       this.em.create(OutboxRecord, outboxToRecordData(message));
+    }
+  }
+
+  async ensureAccounts(accounts: LedgerAccount[]): Promise<void> {
+    const missing = accounts.filter((account) => !this.ensuredAccounts.has(account.code));
+    if (missing.length > 0) {
+      const placeholders = missing.map(() => '(?, ?, ?, ?, ?)').join(', ');
+      await this.em.execute(
+        `INSERT INTO ledger_accounts (code, kind, currency, wallet_id, provider_id)
+         VALUES ${placeholders}
+         ON CONFLICT DO NOTHING`,
+        missing.flatMap((account) => [
+          account.code,
+          account.kind,
+          account.currency,
+          account.walletId ?? null,
+          account.providerId ?? null,
+        ]),
+      );
+      for (const account of missing) {
+        this.ensuredAccounts.add(account.code);
+      }
+    }
+  }
+
+  addJournalEntry(journal: JournalEntry): void {
+    this.em.create(JournalEntryRecord, {
+      id: journal.id,
+      transactionId: journal.transactionId,
+      currency: journal.currency,
+      createdAt: journal.createdAt,
+    });
+    for (const posting of journal.postings) {
+      this.em.create(JournalPostingRecord, {
+        id: randomUUIDv7(),
+        journalEntryId: journal.id,
+        accountCode: posting.accountCode,
+        direction: posting.direction,
+        amount: posting.money.toJSON().amount,
+        currency: posting.money.currency,
+      });
     }
   }
 

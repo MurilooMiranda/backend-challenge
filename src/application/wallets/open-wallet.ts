@@ -1,9 +1,15 @@
 import { WalletBalanceChanged } from '@/domain/events/wagering-events';
+import { LedgerAccount } from '@/domain/ledger/ledger-account';
 import { OutboxMessage } from '@/domain/messaging/outbox-message';
 import { type MoneyProps, Money } from '@/domain/money/money';
-import { WagerTransaction } from '@/domain/wagering/wager-transaction';
+import {
+  INTERNAL_PROVIDER_ID,
+  WagerTransaction,
+  WagerTransactionKind,
+} from '@/domain/wagering/wager-transaction';
 import { Wallet } from '@/domain/wallet/wallet';
 import { InvalidCommandError, UniqueViolationError, WalletAlreadyExistsError } from '../errors';
+import { stageJournal } from '../ledger/stage-journal';
 import type { Clock, IdGenerator, TransactionRunner } from '../ports';
 import { type WalletView, toWalletView } from './wallet-view';
 
@@ -41,6 +47,7 @@ export class OpenWallet {
         });
 
         uow.addWallet(wallet);
+        await uow.ensureAccounts([LedgerAccount.playerWallet(wallet.id, wallet.currency)]);
         if (openingEntry) {
           uow.addTransaction(
             WagerTransaction.opening({
@@ -52,6 +59,13 @@ export class OpenWallet {
             }),
           );
           uow.addLedgerEntry(openingEntry);
+          await stageJournal(
+            uow,
+            openingEntry,
+            WagerTransactionKind.Opening,
+            INTERNAL_PROVIDER_ID,
+            this.ids,
+          );
           uow.addOutboxMessages([
             OutboxMessage.enqueue(
               WalletBalanceChanged.from(wallet, openingEntry, {

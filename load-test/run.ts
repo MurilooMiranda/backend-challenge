@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   const orm = await MikroORM.init(createOrmConfig(config.databaseUrl));
   await orm.migrator.up();
   await orm.em.execute(
-    'TRUNCATE wallet_ledger_entries, wager_transactions, wallets, inbox_messages, outbox_messages RESTART IDENTITY CASCADE',
+    'TRUNCATE journal_postings, journal_entries, ledger_accounts, wallet_ledger_entries, wager_transactions, wallets, inbox_messages, outbox_messages RESTART IDENTITY CASCADE',
   );
 
   const sqs = createSqsClient();
@@ -282,6 +282,33 @@ async function main(): Promise<void> {
             GROUP BY wallet_id
          ) l ON l.wallet_id = w.id`,
       );
+    const [journal] = await orm.em.fork().execute<
+      {
+        entries: number;
+        unbalanced: number;
+        journal_divergent: number;
+        debits: string;
+        credits: string;
+      }[]
+    >(
+      `SELECT (SELECT count(*)::int FROM journal_entries) AS entries,
+              (SELECT count(*)::int
+                 FROM (SELECT journal_entry_id
+                         FROM journal_postings
+                        GROUP BY journal_entry_id
+                       HAVING sum(CASE WHEN direction = 'DEBIT' THEN amount ELSE -amount END) <> 0) u) AS unbalanced,
+              (SELECT count(*)::int
+                 FROM wallets w
+                 LEFT JOIN ledger_accounts a ON a.wallet_id = w.id
+                 LEFT JOIN LATERAL (
+                   SELECT COALESCE(sum(CASE WHEN p.direction = 'CREDIT' THEN p.amount ELSE -p.amount END), 0) AS balance
+                     FROM journal_postings p
+                    WHERE p.account_code = a.code
+                 ) j ON true
+                WHERE w.balance <> COALESCE(j.balance, 0)) AS journal_divergent,
+              (SELECT COALESCE(sum(amount) FILTER (WHERE direction = 'DEBIT'), 0)::text FROM journal_postings) AS debits,
+              (SELECT COALESCE(sum(amount) FILTER (WHERE direction = 'CREDIT'), 0)::text FROM journal_postings) AS credits`,
+    );
     const statusRows = await orm.em
       .fork()
       .execute<{ status: string; failure_code: string | null; n: number }[]>(
@@ -361,6 +388,11 @@ async function main(): Promise<void> {
         divergentWallets: correctness?.divergent ?? -1,
         ledgerEntries: correctness?.entries ?? 0,
         transactions: correctness?.transactions ?? 0,
+        journalEntries: journal?.entries ?? 0,
+        unbalancedJournalEntries: journal?.unbalanced ?? -1,
+        journalDivergentWallets: journal?.journal_divergent ?? -1,
+        journalDebits: journal?.debits ?? '?',
+        journalCredits: journal?.credits ?? '?',
         statuses: statusRows,
       },
     };
@@ -378,7 +410,11 @@ async function main(): Promise<void> {
     writeFileSync('load-test/results/latest.json', `${JSON.stringify(report, null, 2)}\n`);
     console.log(markdown);
 
-    if (report.correctness.divergentWallets !== 0) {
+    if (
+      report.correctness.divergentWallets !== 0 ||
+      report.correctness.unbalancedJournalEntries !== 0 ||
+      report.correctness.journalDivergentWallets !== 0
+    ) {
       process.exitCode = 1;
     }
   } finally {

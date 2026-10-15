@@ -8,6 +8,7 @@ export interface ReconciliationReport {
   storedBalance: MoneyProps;
   calculatedBalance: MoneyProps;
   difference: MoneyProps;
+  journalBalance: MoneyProps;
   consistent: boolean;
   checkedEntries: number;
 }
@@ -27,7 +28,8 @@ export class ReconcileWallet {
     const stored = snapshot.wallet.balance;
     const calculated = snapshot.credits.subtract(snapshot.debits);
     const difference = stored.subtract(calculated);
-    const consistent = difference.isZero();
+    const journal = snapshot.journalCredits.subtract(snapshot.journalDebits);
+    const consistent = difference.isZero() && journal.equals(stored);
 
     this.telemetry.reconciliationChecked({
       walletId,
@@ -41,6 +43,7 @@ export class ReconcileWallet {
       storedBalance: stored.toJSON(),
       calculatedBalance: calculated.toJSON(),
       difference: difference.toJSON(),
+      journalBalance: journal.toJSON(),
       consistent,
       checkedEntries: snapshot.entries,
     };

@@ -12,7 +12,7 @@ export async function createTestOrm(): Promise<MikroORM> {
 
 export async function resetDatabase(orm: MikroORM): Promise<void> {
   await orm.em.execute(`
-    TRUNCATE wallet_ledger_entries, wager_transactions, wallets, inbox_messages, outbox_messages
+    TRUNCATE journal_postings, journal_entries, ledger_accounts, wallet_ledger_entries, wager_transactions, wallets, inbox_messages, outbox_messages
     RESTART IDENTITY CASCADE
   `);
 }

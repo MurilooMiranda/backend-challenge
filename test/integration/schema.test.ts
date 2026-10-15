@@ -9,7 +9,9 @@ const BET_TX = '00000000-0000-0000-0000-0000000000a2';
 const sql = {
   wallet: (id = WALLET, player = 'player-1', balance = '100.00') =>
     `INSERT INTO wallets (id, player_id, currency, balance, version, created_at, updated_at)
-     VALUES ('${id}', '${player}', 'BRL', ${balance}, 1, now(), now())`,
+     VALUES ('${id}', '${player}', 'BRL', ${balance}, 1, now(), now());
+     INSERT INTO ledger_accounts (code, kind, currency, wallet_id)
+     VALUES ('PLAYER:${id}', 'PLAYER_WALLET', 'BRL', '${id}')`,
 
   tx: (
     id: string,
@@ -48,11 +50,53 @@ const sql = {
     before: string,
     after: string,
     currency = 'BRL',
+    counterparty: 'HOUSE' | 'FUNDING' = 'HOUSE',
   ) =>
-    `INSERT INTO wallet_ledger_entries
-       (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
-     VALUES ('${id}', '${WALLET}', '${txId}', '${direction}', ${amount}, '${currency}', ${before}, ${after}, now())`,
+    [
+      `INSERT INTO wallet_ledger_entries
+         (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+       VALUES ('${id}', '${WALLET}', '${txId}', '${direction}', ${amount}, '${currency}', ${before}, ${after}, now())`,
+      sql.journal(
+        txId,
+        [
+          [`PLAYER:${WALLET}`, direction, amount],
+          [counterpartyCode(counterparty, currency), opposite(direction), amount],
+        ],
+        currency,
+        counterparty,
+      ),
+    ].join(';\n'),
+
+  journal: (
+    txId: string,
+    postings: [string, string, string][],
+    currency = 'BRL',
+    counterparty: 'HOUSE' | 'FUNDING' = 'HOUSE',
+  ) =>
+    `INSERT INTO ledger_accounts (code, kind, currency, provider_id)
+     VALUES ('${counterpartyCode(counterparty, currency)}', '${counterparty}', '${currency}', ${counterparty === 'HOUSE' ? "'provider-a'" : 'NULL'})
+     ON CONFLICT (code) DO NOTHING;
+     WITH j AS (
+       INSERT INTO journal_entries (id, transaction_id, currency, created_at)
+       VALUES (gen_random_uuid(), '${txId}', '${currency}', now())
+       RETURNING id
+     )
+     INSERT INTO journal_postings (id, journal_entry_id, account_code, direction, amount, currency)
+     ${postings
+       .map(
+         ([account, direction, amount]) =>
+           `SELECT gen_random_uuid(), j.id, '${account}', '${direction}', ${amount}, '${currency}' FROM j`,
+       )
+       .join(' UNION ALL ')}`,
 };
+
+function counterpartyCode(kind: 'HOUSE' | 'FUNDING', currency: string) {
+  return kind === 'HOUSE' ? `HOUSE:provider-a:${currency}` : `FUNDING:${currency}`;
+}
+
+function opposite(direction: string) {
+  return direction === 'DEBIT' ? 'CREDIT' : 'DEBIT';
+}
 
 const uuid = (n: number) => `00000000-0000-0000-0000-${n.toString().padStart(12, '0')}`;
 
@@ -60,7 +104,7 @@ async function seedWalletWithBet(orm: MikroORM) {
   await runInTransaction(orm, [
     sql.wallet(),
     sql.tx(OPENING_TX, 'OPENING', '100.00', 'opening'),
-    sql.entry(uuid(901), OPENING_TX, 'CREDIT', '100.00', '0.00', '100.00'),
+    sql.entry(uuid(901), OPENING_TX, 'CREDIT', '100.00', '0.00', '100.00', 'BRL', 'FUNDING'),
   ]);
   await runInTransaction(orm, [
     sql.tx(BET_TX, 'BET', '25.00', 'bet-1'),
@@ -93,11 +137,11 @@ describe('migrations', () => {
       return row!.n;
     };
 
-    expect(await countTables()).toBe(5);
+    expect(await countTables()).toBe(8);
     await orm.migrator.down({ to: 0 });
     expect(await countTables()).toBe(0);
     await orm.migrator.up();
-    expect(await countTables()).toBe(5);
+    expect(await countTables()).toBe(8);
   });
 });
 
@@ -280,5 +324,151 @@ describe('inbox_messages', () => {
                     VALUES ('wager-consumer', 'msg-1', 'h', now())`;
     await runInTransaction(orm, [insert]);
     await expect(runInTransaction(orm, [insert])).rejects.toThrow(/inbox_messages_pkey/);
+  });
+});
+
+async function accountBalances(): Promise<Record<string, string>> {
+  const rows = await orm.em.execute<{ code: string; balance: string }[]>(
+    `SELECT a.code,
+            COALESCE(sum(CASE WHEN p.direction = 'CREDIT' THEN p.amount ELSE -p.amount END), 0)::numeric(20, 2) AS balance
+       FROM ledger_accounts a
+       LEFT JOIN journal_postings p ON p.account_code = a.code
+      GROUP BY a.code`,
+  );
+  return Object.fromEntries(rows.map((row) => [row.code, row.balance]));
+}
+
+describe('double-entry journal', () => {
+  it('every wallet movement has a balanced journal entry and the books sum to zero', async () => {
+    await seedWalletWithBet(orm);
+    expect(await accountBalances()).toEqual({
+      [`PLAYER:${WALLET}`]: '75.00',
+      'FUNDING:BRL': '-100.00',
+      'HOUSE:provider-a:BRL': '25.00',
+    });
+  });
+
+  it('a wallet ledger entry without its journal entry is rejected at commit', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.tx(uuid(3), 'BET', '5.00', 'bet-2'),
+        `INSERT INTO wallet_ledger_entries
+           (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+         VALUES ('${uuid(903)}', '${WALLET}', '${uuid(3)}', 'DEBIT', 5.00, 'BRL', 75.00, 70.00, now())`,
+        `UPDATE wallets SET balance = 70.00 WHERE id = '${WALLET}'`,
+      ]),
+    ).rejects.toThrow(/no matching journal posting/);
+  });
+
+  it('an unbalanced journal entry is rejected at commit', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.tx(uuid(3), 'LOSS', '0.00', 'loss-1'),
+        sql.journal(uuid(3), [
+          ['HOUSE:provider-a:BRL', 'DEBIT', '10.00'],
+          ['FUNDING:BRL', 'CREDIT', '9.00'],
+        ]),
+      ]),
+    ).rejects.toThrow(/is unbalanced/);
+  });
+
+  it('a journal entry needs at least two postings', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.tx(uuid(3), 'LOSS', '0.00', 'loss-1'),
+        sql.journal(uuid(3), [['HOUSE:provider-a:BRL', 'DEBIT', '10.00']]),
+      ]),
+    ).rejects.toThrow(/is unbalanced/);
+  });
+
+  it('a player posting without the matching wallet ledger entry is rejected', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.tx(uuid(3), 'LOSS', '0.00', 'loss-1'),
+        sql.journal(uuid(3), [
+          [`PLAYER:${WALLET}`, 'CREDIT', '10.00'],
+          ['HOUSE:provider-a:BRL', 'DEBIT', '10.00'],
+        ]),
+      ]),
+    ).rejects.toThrow(/no matching wallet ledger entry/);
+  });
+
+  it('a transaction has at most one journal entry', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.journal(BET_TX, [
+          ['HOUSE:provider-a:BRL', 'DEBIT', '1.00'],
+          ['FUNDING:BRL', 'CREDIT', '1.00'],
+        ]),
+      ]),
+    ).rejects.toThrow(/journal_entries_transaction_uq/);
+  });
+
+  it('posting currency must match the account currency', async () => {
+    await seedWalletWithBet(orm);
+    await expect(
+      runInTransaction(orm, [
+        sql.tx(uuid(3), 'LOSS', '0.00', 'loss-1'),
+        sql.journal(
+          uuid(3),
+          [
+            [`PLAYER:${WALLET}`, 'CREDIT', '1.00'],
+            ['HOUSE:provider-a:USD', 'DEBIT', '1.00'],
+          ],
+          'USD',
+        ),
+      ]),
+    ).rejects.toThrow(/journal_postings_account_fk/);
+  });
+
+  it('accounts, journal entries and postings are append-only', async () => {
+    await seedWalletWithBet(orm);
+    await expect(runInTransaction(orm, ['UPDATE journal_postings SET amount = 1'])).rejects.toThrow(
+      /journal_postings is append-only/,
+    );
+    await expect(runInTransaction(orm, ['DELETE FROM journal_entries'])).rejects.toThrow(
+      /journal_entries is append-only/,
+    );
+    await expect(
+      runInTransaction(orm, [`UPDATE ledger_accounts SET currency = 'USD'`]),
+    ).rejects.toThrow(/ledger_accounts is append-only/);
+  });
+
+  it('the migration backfills a balanced journal for ledger entries that existed before it', async () => {
+    await orm.migrator.down();
+    try {
+      await runInTransaction(orm, [
+        `INSERT INTO wallets (id, player_id, currency, balance, version, created_at, updated_at)
+         VALUES ('${WALLET}', 'player-1', 'BRL', 100.00, 1, now(), now())`,
+        sql.tx(OPENING_TX, 'OPENING', '100.00', 'opening'),
+        `INSERT INTO wallet_ledger_entries
+           (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+         VALUES ('${uuid(901)}', '${WALLET}', '${OPENING_TX}', 'CREDIT', 100.00, 'BRL', 0.00, 100.00, now())`,
+      ]);
+      await runInTransaction(orm, [
+        sql.tx(BET_TX, 'BET', '25.00', 'bet-1'),
+        `INSERT INTO wallet_ledger_entries
+           (id, wallet_id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at)
+         VALUES ('${uuid(902)}', '${WALLET}', '${BET_TX}', 'DEBIT', 25.00, 'BRL', 100.00, 75.00, now())`,
+        `UPDATE wallets SET balance = 75.00, version = 2 WHERE id = '${WALLET}'`,
+      ]);
+    } finally {
+      await orm.migrator.up();
+    }
+
+    expect(await accountBalances()).toEqual({
+      [`PLAYER:${WALLET}`]: '75.00',
+      'FUNDING:BRL': '-100.00',
+      'HOUSE:provider-a:BRL': '25.00',
+    });
+    const [row] = await orm.em.execute<{ journals: number }[]>(
+      'SELECT count(*)::int AS journals FROM journal_entries',
+    );
+    expect(row!.journals).toBe(2);
   });
 });

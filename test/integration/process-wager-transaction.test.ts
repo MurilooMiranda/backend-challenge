@@ -5,7 +5,10 @@ import {
   WalletAlreadyExistsError,
   WalletNotFoundError,
 } from '@/application/errors';
+import { GetTrialBalance } from '@/application/ledger/get-trial-balance';
+import { ReconcileWallet } from '@/application/wallets/reconcile-wallet';
 import { FailureCode } from '@/domain/wagering/failure-code';
+import { MikroOrmWageringQueries } from '@/infrastructure/persistence/mikro-orm-wagering-queries';
 import { WagerTransactionStatus as Status } from '@/domain/wagering/wager-transaction';
 import { createTestOrm, resetDatabase } from '../support/database';
 import {
@@ -299,5 +302,78 @@ describe('concurrency', () => {
     expect(
       await countRows(orm, 'wager_transactions', `idempotency_key = ?`, [shared.idempotencyKey]),
     ).toBe(1);
+  });
+});
+
+describe('double-entry bookkeeping', () => {
+  const trialBalance = () => new GetTrialBalance(new MikroOrmWageringQueries(orm)).execute('BRL');
+  const reconcile = (walletId: string) =>
+    new ReconcileWallet(new MikroOrmWageringQueries(orm)).execute(walletId);
+
+  it('every operation kind keeps the books balanced and the player account equal to the wallet', async () => {
+    const wallet = await openWallet('100.00');
+    const run = (overrides: Parameters<typeof wagerCommand>[2]) =>
+      useCases.processWager.execute(wagerCommand(wallet.id, wallet.playerId, overrides));
+
+    const bet = wagerCommand(wallet.id, wallet.playerId, {
+      money: { amount: '40.00', currency: 'BRL' },
+    });
+    await useCases.processWager.execute(bet);
+    const win = wagerCommand(wallet.id, wallet.playerId, {
+      kind: 'WIN',
+      money: { amount: '70.00', currency: 'BRL' },
+    });
+    await useCases.processWager.execute(win);
+    await run({ kind: 'LOSS', money: { amount: '0.00', currency: 'BRL' } });
+    await run({
+      kind: 'REFUND',
+      money: { amount: '40.00', currency: 'BRL' },
+      referenceExternalTransactionId: bet.externalTransactionId,
+    });
+    await run({
+      kind: 'ROLLBACK',
+      money: { amount: '70.00', currency: 'BRL' },
+      referenceExternalTransactionId: win.externalTransactionId,
+    });
+    await run({ money: { amount: '999.00', currency: 'BRL' } });
+
+    expect(await countRows(orm, 'journal_entries', 'true')).toBe(
+      await countRows(orm, 'wallet_ledger_entries', 'true'),
+    );
+
+    const report = await reconcile(wallet.id);
+    expect(report.consistent).toBe(true);
+    expect(report.journalBalance).toEqual({ amount: '100.00', currency: 'BRL' });
+
+    const books = await trialBalance();
+    expect(books.balanced).toBe(true);
+    expect(books.totalDebits).toEqual(books.totalCredits);
+    expect(books.accounts.find((a) => a.kind === 'HOUSE')?.balance).toEqual({
+      amount: '0.00',
+      currency: 'BRL',
+    });
+  });
+
+  it('concurrent traffic on many wallets keeps every journal balanced', async () => {
+    const wallets = await Promise.all(Array.from({ length: 8 }, () => openWallet('100.00')));
+    await Promise.all(
+      wallets.flatMap((wallet, i) =>
+        Array.from({ length: 6 }, (_, j) =>
+          useCases.processWager.execute(
+            wagerCommand(wallet.id, wallet.playerId, {
+              kind: (i + j) % 3 === 0 ? 'WIN' : 'BET',
+              money: { amount: '15.00', currency: 'BRL' },
+            }),
+          ),
+        ),
+      ),
+    );
+
+    const books = await trialBalance();
+    expect(books.balanced).toBe(true);
+    expect(books.unbalancedJournalEntries).toBe(0);
+    for (const wallet of wallets) {
+      expect((await reconcile(wallet.id)).consistent).toBe(true);
+    }
   });
 });

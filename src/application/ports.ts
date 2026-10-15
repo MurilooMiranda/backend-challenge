@@ -1,3 +1,5 @@
+import type { JournalEntry } from '@/domain/ledger/journal-entry';
+import type { LedgerAccount } from '@/domain/ledger/ledger-account';
 import type { WalletLedgerEntry } from '@/domain/ledger/wallet-ledger-entry';
 import type { InboxMessage } from '@/domain/messaging/inbox-message';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
@@ -32,6 +34,8 @@ export interface WageringUnitOfWork {
   addTransaction(tx: WagerTransaction): void;
   saveTransaction(tx: WagerTransaction): void;
   addLedgerEntry(entry: WalletLedgerEntry): void;
+  ensureAccounts(accounts: LedgerAccount[]): Promise<void>;
+  addJournalEntry(journal: JournalEntry): void;
   addOutboxMessages(messages: OutboxMessage[]): void;
   addInboxMessage(message: InboxMessage): void;
 }
@@ -54,6 +58,7 @@ export interface WageringQueries {
     limit: number,
   ): Promise<LedgerPageRow[]>;
   reconciliationSnapshot(walletId: string): Promise<ReconciliationSnapshot | null>;
+  trialBalance(currency: string): Promise<TrialBalanceSnapshot>;
 }
 
 export interface LedgerPageRow {
@@ -66,6 +71,22 @@ export interface ReconciliationSnapshot {
   credits: Money;
   debits: Money;
   entries: number;
+  journalCredits: Money;
+  journalDebits: Money;
+}
+
+export interface TrialBalanceAccountRow {
+  code: string;
+  kind: string;
+  credits: Money;
+  debits: Money;
+}
+
+export interface TrialBalanceSnapshot {
+  accounts: TrialBalanceAccountRow[];
+  playerWallets: { accounts: number; credits: Money; debits: Money };
+  journalEntries: number;
+  unbalancedJournalEntries: number;
 }
 
 export interface PendingReferenceRef {

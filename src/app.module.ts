@@ -2,6 +2,7 @@ import { GetQueueAttributesCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
+import { GetTrialBalance } from './application/ledger/get-trial-balance';
 import { PublishOutboxEvents } from './application/messaging/publish-outbox-events';
 import {
   CLOCK,
@@ -34,6 +35,7 @@ import { SystemClock, UuidV7Generator } from './infrastructure/system';
 import { AuthGuard } from './interfaces/http/auth.guard';
 import { HealthController } from './interfaces/http/health.controller';
 import { HttpErrorFilter } from './interfaces/http/http-error.filter';
+import { LedgerController } from './interfaces/http/ledger.controller';
 import { MetricsController } from './interfaces/http/metrics.controller';
 import { requestContextMiddleware } from './interfaces/http/request-context.middleware';
 import { WageringController } from './interfaces/http/wagering.controller';
@@ -45,7 +47,13 @@ import {
 import { BackgroundWorkers } from './interfaces/workers/background-workers';
 
 @Module({
-  controllers: [HealthController, MetricsController, WalletsController, WageringController],
+  controllers: [
+    HealthController,
+    MetricsController,
+    WalletsController,
+    WageringController,
+    LedgerController,
+  ],
   providers: [
     ormProvider,
     OrmShutdown,
@@ -103,6 +111,11 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
       useFactory: (runner: TransactionRunner, clock: Clock, ids: IdGenerator) =>
         new OpenWallet(runner, clock, ids),
       inject: [TRANSACTION_RUNNER, CLOCK, ID_GENERATOR],
+    },
+    {
+      provide: GetTrialBalance,
+      useFactory: (queries: WageringQueries) => new GetTrialBalance(queries),
+      inject: [WAGERING_QUERIES],
     },
     {
       provide: GetWalletLedger,

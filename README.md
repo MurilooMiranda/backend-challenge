@@ -102,6 +102,18 @@ curl 'localhost:3000/wallets/<walletId>/ledger?limit=50&cursor=<nextCursor>'
 curl -X POST localhost:3000/wallets/<walletId>/reconciliation
 ```
 
+A reconciliação compara três fontes: o saldo armazenado na wallet, o saldo reconstruído pelo ledger da wallet e o saldo da conta do jogador no razão contábil (`journalBalance`).
+
+### Razão contábil (partidas dobradas)
+
+Toda movimentação de saldo gera, na mesma transação SQL, um lançamento contábil com dois postings que se anulam: conta do jogador (`PLAYER:<walletId>`) contra a conta da casa do provedor (`HOUSE:<providerId>:<moeda>`) ou, no saldo de abertura, contra a conta de funding (`FUNDING:<moeda>`).
+
+```bash
+curl 'localhost:3000/ledger/trial-balance?currency=BRL'
+```
+
+O balancete devolve débitos, créditos e saldo por conta (contas de jogador agregadas), o total de débitos e créditos e `balanced: true` quando os dois fecham e nenhum lançamento está desbalanceado.
+
 ### Transações
 
 ```bash
