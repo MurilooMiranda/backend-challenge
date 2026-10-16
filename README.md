@@ -57,20 +57,21 @@ bun run auth:smoke
 
 ## Comandos
 
-| Comando                    | O que faz                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------- |
-| `bun run dev`              | API com hot reload                                                                    |
-| `bun run start`            | API sem hot reload                                                                    |
-| `bun run db:migrate`       | aplica migrations pendentes                                                           |
-| `bun run db:rollback`      | reverte a última migration                                                            |
-| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                                                    |
-| `bun run format`           | Prettier                                                                              |
-| `bun test`                 | toda a suíte                                                                          |
-| `bun run test:unit`        | testes unitários (sem infraestrutura)                                                 |
-| `bun run test:integration` | Postgres e LocalStack reais                                                           |
-| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart                       |
-| `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md`           |
-| `bun run auth:smoke`       | valida a autenticação ponta a ponta contra o Keycloak e a aplicação (`--profile app`) |
+| Comando                    | O que faz                                                                                                                                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bun run dev`              | API com hot reload                                                                                                                                                                                                 |
+| `bun run start`            | API sem hot reload                                                                                                                                                                                                 |
+| `bun run db:migrate`       | aplica migrations pendentes                                                                                                                                                                                        |
+| `bun run db:rollback`      | reverte a última migration                                                                                                                                                                                         |
+| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                                                                                                                                                                                 |
+| `bun run format`           | Prettier                                                                                                                                                                                                           |
+| `bun test`                 | toda a suíte                                                                                                                                                                                                       |
+| `bun run test:unit`        | testes unitários (sem infraestrutura)                                                                                                                                                                              |
+| `bun run test:integration` | Postgres e LocalStack reais                                                                                                                                                                                        |
+| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart                                                                                                                                                    |
+| `bun run test:property`    | testes baseados em propriedades (fast-check): sequências aleatórias de operações verificando as invariantes, inclusive concorrência contra o Postgres; `FC_NUM_RUNS` / `FC_NUM_RUNS_DB` aumentam o número de casos |
+| `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md`                                                                                                                                        |
+| `bun run auth:smoke`       | valida a autenticação ponta a ponta contra o Keycloak e a aplicação (`--profile app`)                                                                                                                              |
 
 Os testes de integração e concorrência precisam do `docker compose up -d`. Eles usam o banco `wagering_test` e criam filas temporárias próprias no LocalStack, então podem rodar com a aplicação de desenvolvimento ligada.
 
