@@ -8,6 +8,7 @@ import type { MikroORM } from '@mikro-orm/postgresql';
 import { InfrastructureUnavailableError, UniqueViolationError } from '@/application/errors';
 import type { TransactionRunner, WageringUnitOfWork } from '@/application/ports';
 import { type Telemetry, noopTelemetry } from '@/application/telemetry';
+import { SpanKind, withSpan } from '../observability/tracing';
 import { MikroOrmWageringUnitOfWork } from './mikro-orm-unit-of-work';
 
 export function translatePersistenceError(error: unknown): unknown {
@@ -40,9 +41,15 @@ export class MikroOrmTransactionRunner implements TransactionRunner {
 
   async run<T>(work: (uow: WageringUnitOfWork) => Promise<T>): Promise<T> {
     try {
-      return await this.orm.em
-        .fork()
-        .transactional((em) => work(new MikroOrmWageringUnitOfWork(em, this.telemetry)));
+      return await withSpan(
+        'db.transaction',
+        { 'db.system': 'postgresql' },
+        () =>
+          this.orm.em
+            .fork()
+            .transactional((em) => work(new MikroOrmWageringUnitOfWork(em, this.telemetry))),
+        { kind: SpanKind.CLIENT },
+      );
     } catch (error) {
       throw translatePersistenceError(error);
     }

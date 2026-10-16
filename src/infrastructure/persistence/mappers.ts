@@ -181,6 +181,7 @@ export function outboxToDomain(record: OutboxRecord): OutboxMessage {
     nextAttemptAt: record.nextAttemptAt,
     ...(record.publishedAt != null ? { publishedAt: record.publishedAt } : {}),
     ...(record.lastError != null ? { lastError: record.lastError } : {}),
+    headers: record.headers ?? {},
   });
 }
 
@@ -202,5 +203,6 @@ export function outboxToRecordData(message: OutboxMessage): OutboxRecord {
     nextAttemptAt: message.nextAttemptAt,
     publishedAt: message.publishedAt ?? null,
     lastError: message.lastError ?? null,
+    headers: { ...message.headers },
   };
 }

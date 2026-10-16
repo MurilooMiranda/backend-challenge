@@ -11,6 +11,7 @@ import type { OutboxMessage } from '@/domain/messaging/outbox-message';
 import { WagerTransactionKind, WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import type { WagerTransaction } from '@/domain/wagering/wager-transaction';
 import type { Wallet } from '@/domain/wallet/wallet';
+import { SpanKind, injectTraceHeaders, withSpan } from '../observability/tracing';
 import {
   applyTransactionToRecord,
   applyWalletToRecord,
@@ -45,10 +46,12 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
 
   async lockWallet(walletId: string): Promise<Wallet | null> {
     const startedAt = performance.now();
-    const record = await this.em.findOne(
-      WalletRecord,
-      { id: walletId },
-      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    const record = await withSpan(
+      'wallet.lock',
+      { 'wallet.id': walletId, 'db.system': 'postgresql', 'db.operation': 'SELECT FOR UPDATE' },
+      () =>
+        this.em.findOne(WalletRecord, { id: walletId }, { lockMode: LockMode.PESSIMISTIC_WRITE }),
+      { kind: SpanKind.CLIENT },
     );
     this.telemetry.walletLockWait((performance.now() - startedAt) / 1000);
     if (!record) {
@@ -128,8 +131,9 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   }
 
   addOutboxMessages(messages: OutboxMessage[]): void {
+    const headers = injectTraceHeaders();
     for (const message of messages) {
-      this.em.create(OutboxRecord, outboxToRecordData(message));
+      this.em.create(OutboxRecord, outboxToRecordData(message.withHeaders(headers)));
     }
   }
 

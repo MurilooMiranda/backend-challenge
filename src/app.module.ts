@@ -28,6 +28,7 @@ import { ReferenceRetryPolicy } from './domain/wagering/reference-retry-policy';
 import { SQS_CLIENT, SqsEventPublisher, readSqsQueues } from './infrastructure/messaging/sqs';
 import { SqsShutdown, sqsClientProvider } from './infrastructure/messaging/sqs.provider';
 import { PrometheusTelemetry } from './infrastructure/observability/prometheus-telemetry';
+import { TracingShutdown } from './infrastructure/observability/tracing.provider';
 import { MikroOrmOutboxStore } from './infrastructure/persistence/mikro-orm-outbox-store';
 import { MikroOrmTransactionRunner } from './infrastructure/persistence/mikro-orm-transaction-runner';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-wagering-queries';
@@ -59,6 +60,7 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
   providers: [
     ormProvider,
     OrmShutdown,
+    TracingShutdown,
     sqsClientProvider,
     SqsShutdown,
     AuthGuard,

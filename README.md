@@ -167,6 +167,32 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 
 Os endpoints de health e de métricas não exigem autenticação.
 
+## Observabilidade
+
+```bash
+docker compose --profile app --profile observability up -d --build
+```
+
+| Ferramenta | Endereço               | O que mostra                                                                                                                                                                                                                                                                   |
+| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Grafana    | http://localhost:3100  | dashboard **Wagering service** (abre como página inicial): throughput por status, latência p50/p95/p99, espera do lock da wallet, duplicatas e conflitos, outbox (pendentes, lag, publicações), consumidor SQS, DLQ, divergências de reconciliação e CPU/memória por instância |
+| Prometheus | http://localhost:9090  | coleta o `/metrics` das três réplicas a cada 5 s (e de `bun run dev` na porta 3000, via `host.docker.internal`)                                                                                                                                                                |
+| Jaeger     | http://localhost:16686 | traces distribuídos do serviço `wagering-service`                                                                                                                                                                                                                              |
+
+**Traces.** Com `OTEL_ENABLED=true` a aplicação exporta spans via OTLP/HTTP. Um trace segue a operação inteira:
+
+```
+POST /wagering/transactions            (continua um traceparent recebido, se houver)
+└── db.transaction
+    └── wallet.lock                    (SELECT ... FOR UPDATE: tempo de espera pelo lock)
+publish WalletBalanceChanged           (worker da outbox, mesmo trace da requisição)
+process wager-transactions             (consumidor SQS, continua o traceparent da mensagem)
+└── db.transaction
+    └── wallet.lock
+```
+
+O contexto do trace é gravado junto com o evento na outbox (coluna `headers`, na mesma transação SQL) e enviado como atributo `traceparent` da mensagem SQS; mensagens recebidas com `traceparent` continuam o trace do produtor. Toda resposta HTTP traz `x-trace-id`, e os logs JSON escritos dentro de um span trazem `traceId` e `spanId`, o que permite ir do log ao trace.
+
 ## Autenticação
 
 A API valida tokens JWT emitidos por um **Keycloak** (OIDC, fluxo `client_credentials`): assinatura via JWKS, `iss`, `aud` (`wagering-api`) e expiração. Os papéis vêm de `realm_access.roles` e o provedor da claim `provider_id`.
@@ -232,30 +258,33 @@ docker compose exec localstack awslocal sqs receive-message \
 
 ## Variáveis de ambiente
 
-| Variável                                      | Padrão              | Descrição                                                        |
-| --------------------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| `PORT`                                        | `3000`              | porta HTTP                                                       |
-| `DATABASE_URL`                                | —                   | conexão PostgreSQL                                               |
-| `TEST_DATABASE_URL`                           | `.../wagering_test` | banco usado pelos testes                                         |
-| `AWS_REGION` / `AWS_ENDPOINT`                 | `us-east-1` / —     | região e endpoint do SQS (LocalStack)                            |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | —                   | credenciais (qualquer valor no LocalStack)                       |
-| `SQS_TRANSACTIONS_QUEUE_URL`                  | —                   | fila de entrada                                                  |
-| `SQS_TRANSACTIONS_DLQ_URL`                    | —                   | DLQ da entrada                                                   |
-| `SQS_EVENTS_QUEUE_URL`                        | —                   | fila de eventos de integração                                    |
-| `WORKERS_ENABLED`                             | `true`              | liga consumidor SQS, publisher da outbox e worker de referências |
-| `RUN_MIGRATIONS`                              | `false`             | aplica migrations ao subir                                       |
-| `SQS_WAIT_TIME_SECONDS`                       | `20`                | long polling do consumidor                                       |
-| `SQS_RETRY_BASE_SECONDS`                      | `2`                 | base do backoff de falhas transitórias                           |
-| `SQS_CONSUMER_POLLERS`                        | `4`                 | loops de long polling concorrentes por instância                 |
-| `OUTBOX_POLL_INTERVAL_MS`                     | `500`               | intervalo ocioso do publisher                                    |
-| `PENDING_REFERENCE_POLL_INTERVAL_MS`          | `1000`              | intervalo ocioso do worker de referências                        |
-| `LOG_LEVEL`                                   | `info`              | `trace`, `debug`, `info`, `warn`, `error`                        |
-| `DB_DEBUG`                                    | `false`             | imprime o SQL executado pelo ORM                                 |
-| `AUTH_ENABLED`                                | `false`             | liga a validação de JWT                                          |
-| `AUTH_ISSUER`                                 | —                   | `iss` esperado (`http://localhost:8080/realms/wagering`)         |
-| `AUTH_AUDIENCE`                               | —                   | `aud` esperado (`wagering-api`)                                  |
-| `AUTH_JWKS_URL`                               | —                   | endpoint de chaves públicas do Keycloak                          |
-| `AUTH_PROVIDER_CLAIM`                         | `provider_id`       | claim com o identificador do provedor                            |
+| Variável                                      | Padrão                  | Descrição                                                        |
+| --------------------------------------------- | ----------------------- | ---------------------------------------------------------------- |
+| `PORT`                                        | `3000`                  | porta HTTP                                                       |
+| `DATABASE_URL`                                | —                       | conexão PostgreSQL                                               |
+| `TEST_DATABASE_URL`                           | `.../wagering_test`     | banco usado pelos testes                                         |
+| `AWS_REGION` / `AWS_ENDPOINT`                 | `us-east-1` / —         | região e endpoint do SQS (LocalStack)                            |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | —                       | credenciais (qualquer valor no LocalStack)                       |
+| `SQS_TRANSACTIONS_QUEUE_URL`                  | —                       | fila de entrada                                                  |
+| `SQS_TRANSACTIONS_DLQ_URL`                    | —                       | DLQ da entrada                                                   |
+| `SQS_EVENTS_QUEUE_URL`                        | —                       | fila de eventos de integração                                    |
+| `WORKERS_ENABLED`                             | `true`                  | liga consumidor SQS, publisher da outbox e worker de referências |
+| `RUN_MIGRATIONS`                              | `false`                 | aplica migrations ao subir                                       |
+| `SQS_WAIT_TIME_SECONDS`                       | `20`                    | long polling do consumidor                                       |
+| `SQS_RETRY_BASE_SECONDS`                      | `2`                     | base do backoff de falhas transitórias                           |
+| `SQS_CONSUMER_POLLERS`                        | `4`                     | loops de long polling concorrentes por instância                 |
+| `OUTBOX_POLL_INTERVAL_MS`                     | `500`                   | intervalo ocioso do publisher                                    |
+| `PENDING_REFERENCE_POLL_INTERVAL_MS`          | `1000`                  | intervalo ocioso do worker de referências                        |
+| `LOG_LEVEL`                                   | `info`                  | `trace`, `debug`, `info`, `warn`, `error`                        |
+| `DB_DEBUG`                                    | `false`                 | imprime o SQL executado pelo ORM                                 |
+| `AUTH_ENABLED`                                | `false`                 | liga a validação de JWT                                          |
+| `AUTH_ISSUER`                                 | —                       | `iss` esperado (`http://localhost:8080/realms/wagering`)         |
+| `AUTH_AUDIENCE`                               | —                       | `aud` esperado (`wagering-api`)                                  |
+| `AUTH_JWKS_URL`                               | —                       | endpoint de chaves públicas do Keycloak                          |
+| `AUTH_PROVIDER_CLAIM`                         | `provider_id`           | claim com o identificador do provedor                            |
+| `OTEL_ENABLED`                                | `false`                 | liga a exportação de traces                                      |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                 | `http://localhost:4318` | coletor OTLP/HTTP (Jaeger)                                       |
+| `OTEL_SERVICE_NAME`                           | `wagering-service`      | nome do serviço nos traces                                       |
 
 ## Estrutura
 

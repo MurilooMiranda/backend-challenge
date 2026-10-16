@@ -1,5 +1,6 @@
 import type { LoggerService } from '@nestjs/common';
 import { currentLogContext } from './log-context';
+import { currentTraceIds } from './tracing';
 
 type Level = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
@@ -63,6 +64,7 @@ export class JsonLogger implements LoggerService {
       time: new Date().toISOString(),
       ...(context ? { context } : {}),
       ...currentLogContext(),
+      ...currentTraceIds(),
       ...body,
       ...(stack ? { stack } : {}),
     };

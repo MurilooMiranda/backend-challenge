@@ -16,6 +16,9 @@ x-app-environment: &app-environment
   AUTH_ISSUER: http://localhost:8080/realms/wagering
   AUTH_AUDIENCE: wagering-api
   AUTH_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+  OTEL_ENABLED: 'true'
+  OTEL_SERVICE_NAME: wagering-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
 
 x-app: &app
   build: .
@@ -128,6 +131,42 @@ services:
     <<: *app
     ports:
       - '3003:3000'
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60.0
+    profiles: ['observability']
+    environment:
+      COLLECTOR_OTLP_ENABLED: 'true'
+    ports:
+      - '16686:16686'
+      - '4318:4318'
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ['observability']
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - '9090:9090'
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ['observability']
+    depends_on:
+      - prometheus
+      - jaeger
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/wagering.json
+    volumes:
+      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - '3100:3000'
 
 volumes:
   pgdata:

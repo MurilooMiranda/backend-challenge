@@ -127,6 +127,20 @@ Leitura dos números:
 - Mover o upsert das contas para **antes** de travar a wallet encurtou a seção crítica: a espera p95 pelo lock caiu de cerca de 210 ms para cerca de 170 ms. O throughput não mudou, o que confirma que o limite é o trabalho total, e não a disputa pelo lock.
 - As contas da casa **não têm saldo materializado**. Se tivessem, toda aposta de um provedor precisaria travar a mesma linha: um lock global, que transformaria o provedor inteiro em uma wallet quente. O saldo delas é calculado no balancete.
 
+## Custo do tracing
+
+Com `OTEL_ENABLED=true`, cada requisição gera de 3 a 5 spans (HTTP, transação, lock da wallet e, depois, a publicação dos eventos), exportados em lote via OTLP/HTTP. Para medir o custo isolado, as instâncias exportaram para um coletor local que só descarta os spans, intercalando execuções com e sem tracing na mesma sessão:
+
+| Execução | Tracing   | Throughput | p50    | p95    | p99    | Erros |
+| -------- | --------- | ---------- | ------ | ------ | ------ | ----- |
+| 1        | ligado    | 269 req/s  | 165 ms | 303 ms | 469 ms | 0     |
+| 2        | desligado | 248 req/s  | 178 ms | 327 ms | 517 ms | 0     |
+| 3        | ligado    | 211 req/s  | 208 ms | 406 ms | 598 ms | 0     |
+
+A diferença entre ligado e desligado ficou **dentro da variação entre execuções** (a execução com tracing foi tanto a mais rápida quanto a mais lenta). Com três amostras, a conclusão honesta é que o custo do tracing é menor do que o ruído deste ambiente, não que ele seja zero. Uma quarta e uma quinta execução foram interrompidas porque o Docker foi encerrado na máquina; elas seriam necessárias para estimar o custo com alguma precisão. Correção mantida em todas: 0 wallets divergentes e 0 lançamentos contábeis desbalanceados.
+
+Essas execuções foram feitas em outro dia e mostraram throughput acima das medições da seção anterior com a mesma versão do código (182–202 req/s), o que reforça o quanto o estado da máquina pesa: comparações só valem entre execuções intercaladas na mesma sessão.
+
 ## Anomalia observada
 
 Em uma execução da varredura (32 usuários), uma requisição ficou sem resposta por cerca de 290 s, até o timeout padrão do `fetch` do Bun, e a execução seguinte não conseguiu subir as instâncias no tempo limite. Depois disso, o gerador passou a usar timeout de 10 s por requisição (contado como erro), a gravar o log de cada instância em `results/instance-N.log` e a salvar um snapshot de `pg_stat_activity` no primeiro timeout. **Nas 9 execuções seguintes o problema não se repetiu**, então a causa não foi identificada. A instrumentação ficou no gerador para capturar o estado do banco se voltar a acontecer.

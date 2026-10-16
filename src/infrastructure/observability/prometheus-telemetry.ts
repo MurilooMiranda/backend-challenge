@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { trace } from '@opentelemetry/api';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 import type {
   MessageConsumedEvent,
@@ -130,6 +131,15 @@ export class PrometheusTelemetry implements Telemetry {
   }
 
   transactionSettled(event: TransactionSettledEvent): void {
+    trace.getActiveSpan()?.setAttributes({
+      'wager.transaction_id': event.transactionId,
+      'wager.kind': event.kind,
+      'wager.status': event.status,
+      'wager.idempotent_replay': event.idempotentReplay,
+      'wallet.id': event.walletId,
+      'provider.id': event.providerId,
+      ...(event.failureCode ? { 'wager.failure_code': event.failureCode } : {}),
+    });
     this.transactions.inc({ channel: event.channel, kind: event.kind, status: event.status });
     this.latency.observe({ channel: event.channel }, event.durationSeconds);
     if (event.idempotentReplay) {

@@ -10,6 +10,7 @@ export interface OutboxMessageState {
   nextAttemptAt: Date;
   publishedAt?: Date;
   lastError?: string;
+  headers?: Readonly<Record<string, string>>;
 }
 
 const BASE_RETRY_DELAY_MS = 1_000;
@@ -21,6 +22,7 @@ export class OutboxMessage {
   readonly eventType: string;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly occurredAt: Date;
+  readonly headers: Readonly<Record<string, string>>;
 
   private _attempts: number;
   private _nextAttemptAt: Date;
@@ -33,10 +35,26 @@ export class OutboxMessage {
     this.eventType = state.eventType;
     this.payload = state.payload;
     this.occurredAt = state.occurredAt;
+    this.headers = Object.freeze({ ...(state.headers ?? {}) });
     this._attempts = state.attempts;
     this._nextAttemptAt = state.nextAttemptAt;
     this._publishedAt = state.publishedAt;
     this._lastError = state.lastError;
+  }
+
+  withHeaders(headers: Readonly<Record<string, string>>): OutboxMessage {
+    return new OutboxMessage({
+      id: this.id,
+      aggregateId: this.aggregateId,
+      eventType: this.eventType,
+      payload: this.payload,
+      occurredAt: this.occurredAt,
+      attempts: this._attempts,
+      nextAttemptAt: this._nextAttemptAt,
+      ...(this._publishedAt ? { publishedAt: this._publishedAt } : {}),
+      ...(this._lastError !== undefined ? { lastError: this._lastError } : {}),
+      headers: { ...this.headers, ...headers },
+    });
   }
 
   static enqueue(event: IntegrationEvent<unknown>): OutboxMessage {

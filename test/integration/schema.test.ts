@@ -440,7 +440,13 @@ describe('double-entry journal', () => {
   });
 
   it('the migration backfills a balanced journal for ledger entries that existed before it', async () => {
-    await orm.migrator.down();
+    const isApplied = async () =>
+      (await orm.migrator.getExecuted()).some(
+        (migration) => migration.name === 'Migration20261016DoubleEntryLedger',
+      );
+    while (await isApplied()) {
+      await orm.migrator.down();
+    }
     try {
       await runInTransaction(orm, [
         `INSERT INTO wallets (id, player_id, currency, balance, version, created_at, updated_at)

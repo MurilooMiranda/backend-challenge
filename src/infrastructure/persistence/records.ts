@@ -146,6 +146,7 @@ export class OutboxRecord {
   nextAttemptAt!: Date;
   publishedAt?: Date | null;
   lastError?: string | null;
+  headers!: Record<string, string>;
 }
 
 export const OutboxSchema = new EntitySchema<OutboxRecord>({
@@ -162,6 +163,7 @@ export const OutboxSchema = new EntitySchema<OutboxRecord>({
     nextAttemptAt: timestamp,
     publishedAt: nullableTimestamp,
     lastError: nullableText,
+    headers: { type: 'json' },
   },
 });
 

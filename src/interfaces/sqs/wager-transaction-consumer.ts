@@ -17,6 +17,7 @@ import { type ConsumeOutcome, type Telemetry, noopTelemetry } from '@/applicatio
 import type { ProcessWagerTransaction } from '@/application/wagering/process-wager-transaction';
 import { DomainError } from '@/domain/shared/domain-error';
 import { addLogContext, runWithLogContext } from '@/infrastructure/observability/log-context';
+import { SpanKind, extractTraceContext, withSpan } from '@/infrastructure/observability/tracing';
 import {
   RequestValidationError,
   type WagerMessage,
@@ -75,13 +76,16 @@ export class WagerTransactionConsumer {
   private running = false;
   private loops: Promise<void>[] = [];
   private readonly receiveAborts = new Set<AbortController>();
+  private readonly queueName: string;
 
   constructor(
     private readonly sqs: SQSClient,
     private readonly processWager: ProcessWagerTransaction,
     private readonly options: WagerConsumerOptions,
     private readonly telemetry: Telemetry = noopTelemetry,
-  ) {}
+  ) {
+    this.queueName = options.queueUrl.split('/').at(-1) ?? options.queueUrl;
+  }
 
   start(): void {
     if (this.running) {
@@ -110,6 +114,7 @@ export class WagerTransactionConsumer {
           MaxNumberOfMessages: this.options.maxMessages,
           WaitTimeSeconds: this.options.waitTimeSeconds,
           MessageSystemAttributeNames: ['ApproximateReceiveCount', 'MessageGroupId'],
+          MessageAttributeNames: ['traceparent', 'tracestate'],
         }),
         { abortSignal: abort.signal },
       )
@@ -129,8 +134,32 @@ export class WagerTransactionConsumer {
   }
 
   async consume(message: Message): Promise<ConsumeOutcome> {
+    const carrier = Object.fromEntries(
+      Object.entries(message.MessageAttributes ?? {}).map(([key, value]) => [
+        key,
+        value.StringValue,
+      ]),
+    );
     return runWithLogContext({ sqsMessageId: message.MessageId }, async () => {
-      const handled = await this.handle(message);
+      const handled = await withSpan(
+        'process wager-transactions',
+        {
+          'messaging.system': 'aws_sqs',
+          'messaging.operation.type': 'process',
+          'messaging.destination.name': this.queueName,
+          'messaging.message.id': message.MessageId ?? 'unknown',
+          'messaging.message.conversation_id': message.Attributes?.MessageGroupId ?? 'unknown',
+        },
+        async (span) => {
+          const result = await this.handle(message);
+          span.setAttribute('messaging.outcome', result.outcome);
+          if (result.failureCode) {
+            span.setAttribute('messaging.failure_code', result.failureCode);
+          }
+          return result;
+        },
+        { kind: SpanKind.CONSUMER, parent: extractTraceContext(carrier) },
+      );
       this.telemetry.messageConsumed(handled);
       return handled.outcome;
     });

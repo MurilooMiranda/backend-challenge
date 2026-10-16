@@ -1,6 +1,24 @@
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import type { EventPublisher, PublishOutcome } from '@/application/ports';
 import type { OutboxMessage } from '@/domain/messaging/outbox-message';
+import { type Span, context, trace } from '@opentelemetry/api';
+import {
+  SpanKind,
+  SpanStatusCode,
+  extractTraceContext,
+  injectTraceHeaders,
+  tracer,
+} from '../observability/tracing';
+
+function traceAttributes(span: Span) {
+  const headers = injectTraceHeaders(trace.setSpan(context.active(), span));
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      { DataType: 'String' as const, StringValue: value },
+    ]),
+  );
+}
 
 export const SQS_CLIENT = Symbol('SQSClient');
 
@@ -34,16 +52,35 @@ export function readSqsQueues(): SqsQueues {
 
 export class SqsEventPublisher implements EventPublisher {
   readonly maxBatchSize = 10;
+  private readonly queueName: string;
 
   constructor(
     private readonly sqs: SQSClient,
     private readonly queueUrl: string,
-  ) {}
+  ) {
+    this.queueName = queueUrl.split('/').at(-1) ?? queueUrl;
+  }
 
   async publishBatch(messages: OutboxMessage[]): Promise<PublishOutcome[]> {
     if (messages.length === 0) {
       return [];
     }
+    const spans = messages.map((message) =>
+      tracer().startSpan(
+        `publish ${message.eventType}`,
+        {
+          kind: SpanKind.PRODUCER,
+          attributes: {
+            'messaging.system': 'aws_sqs',
+            'messaging.operation.type': 'send',
+            'messaging.destination.name': this.queueName,
+            'messaging.message.id': message.id,
+            'messaging.message.conversation_id': message.aggregateId,
+          },
+        },
+        extractTraceContext(message.headers),
+      ),
+    );
     try {
       const response = await this.sqs.send(
         new SendMessageBatchCommand({
@@ -55,6 +92,7 @@ export class SqsEventPublisher implements EventPublisher {
             MessageDeduplicationId: message.id,
             MessageAttributes: {
               eventType: { DataType: 'String', StringValue: message.eventType },
+              ...traceAttributes(spans[index]!),
             },
           })),
         }),
@@ -67,11 +105,21 @@ export class SqsEventPublisher implements EventPublisher {
       );
       return messages.map((message, index) => {
         const error = failures.get(String(index));
+        if (error !== undefined) {
+          spans[index]!.setStatus({ code: SpanStatusCode.ERROR, message: error });
+        }
         return error === undefined ? { messageId: message.id } : { messageId: message.id, error };
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      for (const span of spans) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
+      }
       return messages.map((message) => ({ messageId: message.id, error: reason }));
+    } finally {
+      for (const span of spans) {
+        span.end();
+      }
     }
   }
 }
