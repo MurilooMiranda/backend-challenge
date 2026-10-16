@@ -40,6 +40,7 @@ export async function startInstance(
       SQS_EVENTS_QUEUE_URL: queues.eventsUrl,
       WORKERS_ENABLED: 'true',
       RUN_MIGRATIONS: 'false',
+      AUTH_ENABLED: 'false',
       SQS_WAIT_TIME_SECONDS: '1',
       SQS_RETRY_BASE_SECONDS: '0',
       OUTBOX_POLL_INTERVAL_MS: '100',

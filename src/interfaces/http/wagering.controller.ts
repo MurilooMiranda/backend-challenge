@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { type Principal, Role, assertProviderAccess, canSeeProvider } from '@/application/auth';
 import { TransactionNotFoundError } from '@/application/errors';
 import { WAGERING_QUERIES, type WageringQueries } from '@/application/ports';
 import { ProcessWagerTransaction } from '@/application/wagering/process-wager-transaction';
@@ -18,7 +19,7 @@ import { type TransactionView, toTransactionView } from '@/application/wagering/
 import type { WagerTransactionResult } from '@/application/wagering/wager-transaction-result';
 import { WagerTransactionStatus } from '@/domain/wagering/wager-transaction';
 import { addLogContext } from '@/infrastructure/observability/log-context';
-import { AuthGuard } from './auth.guard';
+import { AuthGuard, CurrentPrincipal, Roles } from './auth.guard';
 import { CORRELATION_HEADER, resolveCorrelationId } from './correlation';
 import { RequestValidationError, parseBody, wagerTransactionSchema } from './schemas';
 
@@ -33,7 +34,9 @@ export class WageringController {
   ) {}
 
   @Post('wagering/transactions')
+  @Roles(Role.Provider)
   async submit(
+    @CurrentPrincipal() principal: Principal,
     @Body() body: unknown,
     @Headers(IDEMPOTENCY_HEADER) idempotencyKey: string | undefined,
     @Headers(CORRELATION_HEADER) correlationHeader: string | undefined,
@@ -45,6 +48,7 @@ export class WageringController {
       ]);
     }
     const input = parseBody(wagerTransactionSchema, body);
+    assertProviderAccess(principal, input.providerId);
     const correlationId = resolveCorrelationId(correlationHeader);
     addLogContext({ walletId: input.walletId, providerId: input.providerId });
 
@@ -62,19 +66,26 @@ export class WageringController {
   }
 
   @Get('wagering/transactions/:transactionId')
-  async findById(@Param('transactionId') transactionId: string): Promise<TransactionView> {
+  @Roles(Role.Provider, Role.Operator)
+  async findById(
+    @CurrentPrincipal() principal: Principal,
+    @Param('transactionId') transactionId: string,
+  ): Promise<TransactionView> {
     const tx = await this.queries.findTransaction(transactionId);
-    if (!tx) {
+    if (!tx || !canSeeProvider(principal, tx.providerId)) {
       throw new TransactionNotFoundError(transactionId);
     }
     return toTransactionView(tx);
   }
 
   @Get('providers/:providerId/wagering/transactions/:externalTransactionId')
+  @Roles(Role.Provider, Role.Operator)
   async findByExternalId(
+    @CurrentPrincipal() principal: Principal,
     @Param('providerId') providerId: string,
     @Param('externalTransactionId') externalTransactionId: string,
   ): Promise<TransactionView> {
+    assertProviderAccess(principal, providerId);
     const tx = await this.queries.findTransactionByExternalId(providerId, externalTransactionId);
     if (!tx) {
       throw new TransactionNotFoundError(`${providerId}/${externalTransactionId}`);

@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { Role } from '@/application/auth';
 import { WalletNotFoundError } from '@/application/errors';
 import { WAGERING_QUERIES, type WageringQueries } from '@/application/ports';
 import { GetWalletLedger, type LedgerPage } from '@/application/wallets/get-wallet-ledger';
@@ -18,7 +19,7 @@ import { OpenWallet } from '@/application/wallets/open-wallet';
 import { type ReconciliationReport, ReconcileWallet } from '@/application/wallets/reconcile-wallet';
 import { type WalletView, toWalletView } from '@/application/wallets/wallet-view';
 import { addLogContext } from '@/infrastructure/observability/log-context';
-import { AuthGuard } from './auth.guard';
+import { AuthGuard, Roles } from './auth.guard';
 import { CORRELATION_HEADER, resolveCorrelationId } from './correlation';
 import { RequestValidationError, openWalletSchema, parseBody } from './schemas';
 
@@ -33,6 +34,7 @@ export class WalletsController {
   ) {}
 
   @Post()
+  @Roles(Role.Operator)
   @HttpCode(HttpStatus.CREATED)
   async create(
     @Body() body: unknown,
@@ -49,6 +51,7 @@ export class WalletsController {
   }
 
   @Get(':walletId')
+  @Roles(Role.Provider, Role.Operator)
   async findOne(@Param('walletId') walletId: string): Promise<WalletView> {
     addLogContext({ walletId });
     const wallet = await this.queries.findWallet(walletId);
@@ -59,6 +62,7 @@ export class WalletsController {
   }
 
   @Get(':walletId/ledger')
+  @Roles(Role.Operator)
   async ledger(
     @Param('walletId') walletId: string,
     @Query('cursor') cursor?: string,
@@ -78,6 +82,7 @@ export class WalletsController {
   }
 
   @Post(':walletId/reconciliation')
+  @Roles(Role.Operator)
   @HttpCode(HttpStatus.OK)
   async reconcile(@Param('walletId') walletId: string): Promise<ReconciliationReport> {
     addLogContext({ walletId });

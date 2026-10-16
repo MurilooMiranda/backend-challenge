@@ -49,23 +49,28 @@ O `docker compose up` cria dois bancos (`wagering` para desenvolvimento e `wager
 docker compose --profile app up -d --build
 ```
 
-Sobe um serviço `migrate` (executa as migrations uma única vez) e três réplicas da aplicação em `http://localhost:3001`, `:3002` e `:3003`, todas com API, consumidor SQS, publisher da outbox e worker de referências pendentes ativos sobre o mesmo Postgres e as mesmas filas.
+Sobe o Keycloak, um serviço `migrate` (executa as migrations uma única vez) e três réplicas da aplicação em `http://localhost:3001`, `:3002` e `:3003`, todas com API, consumidor SQS, publisher da outbox e worker de referências pendentes ativos sobre o mesmo Postgres e as mesmas filas. Nesse modo a **autenticação está ligada** (ver [Autenticação](#autenticação)); para validar:
+
+```bash
+bun run auth:smoke
+```
 
 ## Comandos
 
-| Comando                    | O que faz                                                                   |
-| -------------------------- | --------------------------------------------------------------------------- |
-| `bun run dev`              | API com hot reload                                                          |
-| `bun run start`            | API sem hot reload                                                          |
-| `bun run db:migrate`       | aplica migrations pendentes                                                 |
-| `bun run db:rollback`      | reverte a última migration                                                  |
-| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                                          |
-| `bun run format`           | Prettier                                                                    |
-| `bun test`                 | toda a suíte                                                                |
-| `bun run test:unit`        | testes unitários (sem infraestrutura)                                       |
-| `bun run test:integration` | Postgres e LocalStack reais                                                 |
-| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart             |
-| `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md` |
+| Comando                    | O que faz                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------- |
+| `bun run dev`              | API com hot reload                                                                    |
+| `bun run start`            | API sem hot reload                                                                    |
+| `bun run db:migrate`       | aplica migrations pendentes                                                           |
+| `bun run db:rollback`      | reverte a última migration                                                            |
+| `bun run typecheck`        | checagem de tipos (`tsc --noEmit`)                                                    |
+| `bun run format`           | Prettier                                                                              |
+| `bun test`                 | toda a suíte                                                                          |
+| `bun run test:unit`        | testes unitários (sem infraestrutura)                                                 |
+| `bun run test:integration` | Postgres e LocalStack reais                                                           |
+| `bun run test:concurrency` | 3 processos da aplicação em paralelo, incluindo crash e restart                       |
+| `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md`           |
+| `bun run auth:smoke`       | valida a autenticação ponta a ponta contra o Keycloak e a aplicação (`--profile app`) |
 
 Os testes de integração e concorrência precisam do `docker compose up -d`. Eles usam o banco `wagering_test` e criam filas temporárias próprias no LocalStack, então podem rodar com a aplicação de desenvolvimento ligada.
 
@@ -139,16 +144,18 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 
 ### Status HTTP
 
-| Situação                                             | Status                | Corpo                                                  |
-| ---------------------------------------------------- | --------------------- | ------------------------------------------------------ |
-| Transação processada (primeira vez)                  | `201`                 | `status: PROCESSED`                                    |
-| Replay idêntico                                      | `200`                 | resultado original, `idempotentReplay: true`           |
-| Rejeição de regra de negócio                         | `422`                 | `status: REJECTED` + `failureCode`                     |
-| Aceita, aguardando referência                        | `202`                 | `status: PENDING_REFERENCE`                            |
-| Payload inválido / sem `Idempotency-Key`             | `400`                 | `error.code` (`INVALID_PAYLOAD`, `INVALID_MONEY`, ...) |
-| Mesma chave com payload diferente / wallet duplicada | `409`                 | `IDEMPOTENCY_CONFLICT` / `WALLET_ALREADY_EXISTS`       |
-| Wallet ou transação inexistente                      | `404`                 | `WALLET_NOT_FOUND` / `TRANSACTION_NOT_FOUND`           |
-| Falha transitória de infraestrutura                  | `503` + `Retry-After` | `INFRASTRUCTURE_UNAVAILABLE`                           |
+| Situação                                             | Status                     | Corpo                                                  |
+| ---------------------------------------------------- | -------------------------- | ------------------------------------------------------ |
+| Transação processada (primeira vez)                  | `201`                      | `status: PROCESSED`                                    |
+| Replay idêntico                                      | `200`                      | resultado original, `idempotentReplay: true`           |
+| Rejeição de regra de negócio                         | `422`                      | `status: REJECTED` + `failureCode`                     |
+| Aceita, aguardando referência                        | `202`                      | `status: PENDING_REFERENCE`                            |
+| Payload inválido / sem `Idempotency-Key`             | `400`                      | `error.code` (`INVALID_PAYLOAD`, `INVALID_MONEY`, ...) |
+| Mesma chave com payload diferente / wallet duplicada | `409`                      | `IDEMPOTENCY_CONFLICT` / `WALLET_ALREADY_EXISTS`       |
+| Wallet ou transação inexistente                      | `404`                      | `WALLET_NOT_FOUND` / `TRANSACTION_NOT_FOUND`           |
+| Falha transitória de infraestrutura                  | `503` + `Retry-After`      | `INFRASTRUCTURE_UNAVAILABLE`                           |
+| Sem token ou token inválido (autenticação ligada)    | `401` + `WWW-Authenticate` | `UNAUTHENTICATED`                                      |
+| Papel insuficiente ou `providerId` de outro provedor | `403`                      | `FORBIDDEN`                                            |
 
 ### Operação
 
@@ -159,6 +166,37 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 | `GET /metrics`      | métricas no formato Prometheus             |
 
 Os endpoints de health e de métricas não exigem autenticação.
+
+## Autenticação
+
+A API valida tokens JWT emitidos por um **Keycloak** (OIDC, fluxo `client_credentials`): assinatura via JWKS, `iss`, `aud` (`wagering-api`) e expiração. Os papéis vêm de `realm_access.roles` e o provedor da claim `provider_id`.
+
+O realm `wagering` é importado automaticamente de [docker/keycloak/realm](docker/keycloak/realm/wagering-realm.json):
+
+| Client       | Secret              | Papel      | `provider_id` |
+| ------------ | ------------------- | ---------- | ------------- |
+| `provider-a` | `provider-a-secret` | `provider` | `provider-a`  |
+| `provider-b` | `provider-b-secret` | `provider` | `provider-b`  |
+| `backoffice` | `backoffice-secret` | `operator` | —             |
+
+| Endpoint                                          | Quem acessa                                                                            |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `POST /wagering/transactions`                     | `provider`, somente com o próprio `providerId` no corpo (senão `403`)                  |
+| `GET /wagering/transactions/:id`                  | `provider` (só transações do próprio provedor; as demais respondem `404`) e `operator` |
+| `GET /providers/:providerId/...`                  | `provider` do mesmo `providerId` e `operator`                                          |
+| `GET /wallets/:id`                                | `provider` e `operator`                                                                |
+| `POST /wallets`, ledger, reconciliação, balancete | `operator`                                                                             |
+| `/health/*`, `/metrics`                           | abertos                                                                                |
+
+Mensagens da fila são um canal interno confiável e não carregam token; o `providerId` delas continua sujeito às validações de domínio.
+
+```bash
+TOKEN=$(curl -s -d grant_type=client_credentials -d client_id=provider-a -d client_secret=provider-a-secret   http://localhost:8080/realms/wagering/protocol/openid-connect/token | jq -r .access_token)
+
+curl -H "Authorization: Bearer $TOKEN" localhost:3001/wagering/transactions/<transactionId>
+```
+
+No desenvolvimento local (`bun run dev`) a autenticação vem **desligada** (`AUTH_ENABLED=false`). Para ligá-la, suba o Keycloak com `docker compose --profile auth up -d keycloak` e use `AUTH_ENABLED=true` com as variáveis `AUTH_*` do `.env.example`. O console de administração fica em `http://localhost:8080` (admin / admin).
 
 ## Enviando uma transação pela fila
 
@@ -213,6 +251,11 @@ docker compose exec localstack awslocal sqs receive-message \
 | `PENDING_REFERENCE_POLL_INTERVAL_MS`          | `1000`              | intervalo ocioso do worker de referências                        |
 | `LOG_LEVEL`                                   | `info`              | `trace`, `debug`, `info`, `warn`, `error`                        |
 | `DB_DEBUG`                                    | `false`             | imprime o SQL executado pelo ORM                                 |
+| `AUTH_ENABLED`                                | `false`             | liga a validação de JWT                                          |
+| `AUTH_ISSUER`                                 | —                   | `iss` esperado (`http://localhost:8080/realms/wagering`)         |
+| `AUTH_AUDIENCE`                               | —                   | `aud` esperado (`wagering-api`)                                  |
+| `AUTH_JWKS_URL`                               | —                   | endpoint de chaves públicas do Keycloak                          |
+| `AUTH_PROVIDER_CLAIM`                         | `provider_id`       | claim com o identificador do provedor                            |
 
 ## Estrutura
 

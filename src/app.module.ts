@@ -3,6 +3,7 @@ import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common
 import { APP_FILTER } from '@nestjs/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { GetTrialBalance } from './application/ledger/get-trial-balance';
+import { ANONYMOUS_PRINCIPAL, TOKEN_VERIFIER, type TokenVerifier } from './application/auth';
 import { PublishOutboxEvents } from './application/messaging/publish-outbox-events';
 import {
   CLOCK,
@@ -32,7 +33,8 @@ import { MikroOrmTransactionRunner } from './infrastructure/persistence/mikro-or
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-wagering-queries';
 import { MIKRO_ORM, OrmShutdown, ormProvider } from './infrastructure/persistence/orm.provider';
 import { SystemClock, UuidV7Generator } from './infrastructure/system';
-import { AuthGuard } from './interfaces/http/auth.guard';
+import { JwtTokenVerifier, readJwtVerifierConfig } from './infrastructure/auth/jwt-token-verifier';
+import { AUTH_ENABLED, AuthGuard } from './interfaces/http/auth.guard';
 import { HealthController } from './interfaces/http/health.controller';
 import { HttpErrorFilter } from './interfaces/http/http-error.filter';
 import { LedgerController } from './interfaces/http/ledger.controller';
@@ -61,6 +63,18 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
     SqsShutdown,
     AuthGuard,
     BackgroundWorkers,
+    {
+      provide: AUTH_ENABLED,
+      useFactory: () => process.env.AUTH_ENABLED === 'true',
+    },
+    {
+      provide: TOKEN_VERIFIER,
+      useFactory: (enabled: boolean): TokenVerifier =>
+        enabled
+          ? new JwtTokenVerifier(readJwtVerifierConfig())
+          : { verify: async () => ANONYMOUS_PRINCIPAL },
+      inject: [AUTH_ENABLED],
+    },
     { provide: APP_FILTER, useClass: HttpErrorFilter },
     { provide: CLOCK, useValue: new SystemClock() },
     { provide: ID_GENERATOR, useValue: new UuidV7Generator() },

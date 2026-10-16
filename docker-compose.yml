@@ -12,6 +12,10 @@ x-app-environment: &app-environment
   WORKERS_ENABLED: 'true'
   RUN_MIGRATIONS: 'false'
   LOG_LEVEL: info
+  AUTH_ENABLED: 'true'
+  AUTH_ISSUER: http://localhost:8080/realms/wagering
+  AUTH_AUDIENCE: wagering-api
+  AUTH_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
 
 x-app: &app
   build: .
@@ -22,6 +26,8 @@ x-app: &app
     migrate:
       condition: service_completed_successfully
     localstack:
+      condition: service_healthy
+    keycloak:
       condition: service_healthy
   healthcheck:
     test:
@@ -72,6 +78,31 @@ services:
       interval: 2s
       timeout: 3s
       retries: 60
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    profiles: ['app', 'auth']
+    command: ['start-dev', '--import-realm']
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: http://localhost:8080
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: 'true'
+      KC_HTTP_ENABLED: 'true'
+      KC_HEALTH_ENABLED: 'true'
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./docker/keycloak/realm:/opt/keycloak/data/import:ro
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "exec 3<>/dev/tcp/localhost/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
 
   migrate:
     build: .

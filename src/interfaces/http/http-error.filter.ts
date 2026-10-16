@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { ForbiddenError, UnauthenticatedError } from '@/application/auth';
 import {
   ApplicationError,
   IdempotencyConflictError,
@@ -31,6 +32,9 @@ export class HttpErrorFilter implements ExceptionFilter {
     const response = host.switchToHttp().getResponse<Response>();
     const { status, body } = this.map(exception);
 
+    if (status === HttpStatus.UNAUTHORIZED) {
+      response.setHeader('WWW-Authenticate', 'Bearer realm="wagering"');
+    }
     if (status === HttpStatus.SERVICE_UNAVAILABLE) {
       response.setHeader('Retry-After', '1');
     }
@@ -41,6 +45,12 @@ export class HttpErrorFilter implements ExceptionFilter {
   }
 
   private map(exception: unknown): { status: number; body: ErrorBody } {
+    if (exception instanceof UnauthenticatedError) {
+      return this.error(HttpStatus.UNAUTHORIZED, exception.code, exception.message);
+    }
+    if (exception instanceof ForbiddenError) {
+      return this.error(HttpStatus.FORBIDDEN, exception.code, exception.message);
+    }
     if (exception instanceof RequestValidationError) {
       return this.error(
         HttpStatus.BAD_REQUEST,
