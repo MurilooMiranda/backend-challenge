@@ -76,7 +76,7 @@ services:
       test:
         [
           'CMD-SHELL',
-          'curl -sf http://localhost:4566/_localstack/init/ready | grep -q ''"completed": true''',
+          'status=$$(curl -sf http://localhost:4566/_localstack/init/ready) && echo "$$status" | grep -q ''"completed": true'' && ! echo "$$status" | grep -q ''"ERROR"''',
         ]
       interval: 2s
       timeout: 3s
