@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Lint, typecheck and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bunx prettier --check .
+      - run: bun run typecheck
+      - run: bun test test/unit
+
+  integration:
+    name: Integration, concurrency and property tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - name: Start Postgres and LocalStack
+        run: docker compose up -d --wait postgres localstack
+      - run: cp .env.example .env
+      - run: bun test test/integration test/concurrency
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose logs postgres localstack
+      - if: always()
+        run: docker compose down -v
+
+  infrastructure:
+    name: Compose, Prometheus rules and Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose --profile app --profile observability config -q
+      - name: Check Prometheus config and alert rules
+        run: |
+          docker run --rm -v "$PWD/docker/observability:/obs" --entrypoint promtool \
+            prom/prometheus:v2.53.0 check rules /obs/alerts.yml
+          docker run --rm -v "$PWD/docker/observability:/obs" \
+            -v "$PWD/docker/observability/alerts.yml:/etc/prometheus/alerts.yml:ro" \
+            --entrypoint promtool prom/prometheus:v2.53.0 check config /obs/prometheus.yml
+      - name: Unit-test alert rules
+        run: |
+          docker run --rm -v "$PWD/docker/observability:/obs" -w /obs --entrypoint promtool \
+            prom/prometheus:v2.53.0 test rules alerts.test.yml
+      - name: Build image
+        run: docker build -t wagering-app:ci .

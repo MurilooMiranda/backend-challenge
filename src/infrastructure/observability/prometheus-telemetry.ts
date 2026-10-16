@@ -4,6 +4,7 @@ import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom
 import type {
   MessageConsumedEvent,
   ReconciliationCheckedEvent,
+  ReconciliationScanEvent,
   Telemetry,
   TransactionSettledEvent,
 } from '@/application/telemetry';
@@ -75,6 +76,34 @@ export class PrometheusTelemetry implements Telemetry {
     name: 'sqs_messages_dead_lettered_total',
     help: 'SQS messages sent to the DLQ by this consumer',
     labelNames: ['failure_code'],
+    registers: [this.registry],
+  });
+
+  private readonly reconciliationScans = new Counter({
+    name: 'wallet_reconciliation_scans_total',
+    help: 'Full wallet reconciliation scans by result',
+    labelNames: ['result'],
+    registers: [this.registry],
+  });
+  private readonly divergentWallets = new Gauge({
+    name: 'wallet_reconciliation_divergent_wallets',
+    help: 'Wallets found divergent by the last full reconciliation scan run by this instance',
+    registers: [this.registry],
+  });
+  private readonly lastScan = new Gauge({
+    name: 'wallet_reconciliation_last_scan_timestamp_seconds',
+    help: 'Unix time of the last full reconciliation scan completed by this instance',
+    registers: [this.registry],
+  });
+  private readonly scanDuration = new Gauge({
+    name: 'wallet_reconciliation_scan_duration_seconds',
+    help: 'Duration of the last full reconciliation scan run by this instance',
+    registers: [this.registry],
+  });
+  private readonly purged = new Counter({
+    name: 'messaging_retention_deleted_total',
+    help: 'Expired inbox/outbox rows deleted by the retention job',
+    labelNames: ['table'],
     registers: [this.registry],
   });
 
@@ -186,6 +215,29 @@ export class PrometheusTelemetry implements Telemetry {
     if (failed > 0) {
       this.logger.warn({ msg: 'outbox publication failed, will retry', published, failed });
     }
+  }
+
+  reconciliationScanCompleted(event: ReconciliationScanEvent): void {
+    this.reconciliationScans.inc({ result: event.divergent > 0 ? 'divergent' : 'clean' });
+    this.divergentWallets.set(event.divergent);
+    this.lastScan.set(Date.now() / 1000);
+    this.scanDuration.set(event.durationSeconds);
+    const fields = {
+      msg: 'wallet reconciliation scan completed',
+      checkedWallets: event.checked,
+      divergentWallets: event.divergent,
+      durationMs: Math.round(event.durationSeconds * 1000),
+    };
+    if (event.divergent > 0) {
+      this.logger.error(fields);
+    } else {
+      this.logger.log(fields);
+    }
+  }
+
+  messagesPurged(table: 'outbox' | 'inbox', count: number): void {
+    this.purged.inc({ table }, count);
+    this.logger.log({ msg: 'expired messages purged', table, count });
   }
 
   messageConsumed(event: MessageConsumedEvent): void {

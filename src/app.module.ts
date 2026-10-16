@@ -3,6 +3,11 @@ import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common
 import { APP_FILTER } from '@nestjs/core';
 import type { MikroORM } from '@mikro-orm/postgresql';
 import { GetTrialBalance } from './application/ledger/get-trial-balance';
+import {
+  PurgeExpiredMessages,
+  retentionPolicyFromEnv,
+} from './application/maintenance/purge-expired-messages';
+import { ReconcileAllWallets } from './application/maintenance/reconcile-all-wallets';
 import { ANONYMOUS_PRINCIPAL, TOKEN_VERIFIER, type TokenVerifier } from './application/auth';
 import { PublishOutboxEvents } from './application/messaging/publish-outbox-events';
 import {
@@ -12,6 +17,8 @@ import {
   type EventPublisher,
   ID_GENERATOR,
   type IdGenerator,
+  MAINTENANCE_STORE,
+  type MaintenanceStore,
   OUTBOX_STORE,
   TRANSACTION_RUNNER,
   type TransactionRunner,
@@ -29,6 +36,7 @@ import { SQS_CLIENT, SqsEventPublisher, readSqsQueues } from './infrastructure/m
 import { SqsShutdown, sqsClientProvider } from './infrastructure/messaging/sqs.provider';
 import { PrometheusTelemetry } from './infrastructure/observability/prometheus-telemetry';
 import { TracingShutdown } from './infrastructure/observability/tracing.provider';
+import { MikroOrmMaintenanceStore } from './infrastructure/persistence/mikro-orm-maintenance-store';
 import { MikroOrmOutboxStore } from './infrastructure/persistence/mikro-orm-outbox-store';
 import { MikroOrmTransactionRunner } from './infrastructure/persistence/mikro-orm-transaction-runner';
 import { MikroOrmWageringQueries } from './infrastructure/persistence/mikro-orm-wagering-queries';
@@ -127,6 +135,23 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
       useFactory: (runner: TransactionRunner, clock: Clock, ids: IdGenerator) =>
         new OpenWallet(runner, clock, ids),
       inject: [TRANSACTION_RUNNER, CLOCK, ID_GENERATOR],
+    },
+    {
+      provide: MAINTENANCE_STORE,
+      useFactory: (orm: MikroORM) => new MikroOrmMaintenanceStore(orm),
+      inject: [MIKRO_ORM],
+    },
+    {
+      provide: PurgeExpiredMessages,
+      useFactory: (store: MaintenanceStore, clock: Clock, telemetry: Telemetry) =>
+        new PurgeExpiredMessages(store, clock, retentionPolicyFromEnv(), telemetry),
+      inject: [MAINTENANCE_STORE, CLOCK, TELEMETRY],
+    },
+    {
+      provide: ReconcileAllWallets,
+      useFactory: (store: MaintenanceStore, telemetry: Telemetry) =>
+        new ReconcileAllWallets(store, telemetry),
+      inject: [MAINTENANCE_STORE, TELEMETRY],
     },
     {
       provide: GetTrialBalance,

@@ -148,6 +148,7 @@ services:
       - 'host.docker.internal:host-gateway'
     volumes:
       - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - '9090:9090'
 

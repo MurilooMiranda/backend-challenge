@@ -112,7 +112,26 @@ export interface EventPublisher {
   publishBatch(messages: OutboxMessage[]): Promise<PublishOutcome[]>;
 }
 
+export interface WalletConsistencyRow {
+  walletId: string;
+  stored: Money;
+  ledger: Money;
+  journal: Money;
+}
+
+export interface WalletConsistencyScan {
+  checked: number;
+  divergent: WalletConsistencyRow[];
+}
+
+export interface MaintenanceStore {
+  purgePublishedOutbox(publishedBefore: Date, limit: number): Promise<number>;
+  purgeProcessedInbox(processedBefore: Date, limit: number): Promise<number>;
+  scanWalletConsistency(batchSize: number): Promise<WalletConsistencyScan | null>;
+}
+
 export const CLOCK = Symbol('Clock');
+export const MAINTENANCE_STORE = Symbol('MaintenanceStore');
 export const ID_GENERATOR = Symbol('IdGenerator');
 export const TRANSACTION_RUNNER = Symbol('TransactionRunner');
 export const WAGERING_QUERIES = Symbol('WageringQueries');

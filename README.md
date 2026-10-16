@@ -1,5 +1,7 @@
 # Distributed Wagering Processor
 
+[![CI](https://github.com/MurilooMiranda/backend-challenge/actions/workflows/ci.yml/badge.svg)](https://github.com/MurilooMiranda/backend-challenge/actions/workflows/ci.yml)
+
 Serviço financeiro que processa transações de apostas (`BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`) recebidas de provedores de jogos via **HTTP** e **SQS**, mantendo saldo, ledger auditável e eventos de integração corretos sob mensagens duplicadas, fora de ordem e processamento concorrente em múltiplas instâncias.
 
 - Enunciado: [CHALLENGE.md](CHALLENGE.md)
@@ -74,6 +76,16 @@ bun run auth:smoke
 | `bun run auth:smoke`       | valida a autenticação ponta a ponta contra o Keycloak e a aplicação (`--profile app`)                                                                                                                              |
 
 Os testes de integração e concorrência precisam do `docker compose up -d`. Eles usam o banco `wagering_test` e criam filas temporárias próprias no LocalStack, então podem rodar com a aplicação de desenvolvimento ligada.
+
+### Integração contínua
+
+O workflow [.github/workflows/ci.yml](.github/workflows/ci.yml) roda em todo push na `main` e em pull requests, com três jobs em paralelo:
+
+| Job              | O que valida                                                                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `static`         | Prettier, typecheck e testes unitários                                                                                                                   |
+| `integration`    | sobe Postgres e LocalStack pelo próprio `docker-compose.yml` e roda integração, concorrência multi-instância e propriedades contra o banco               |
+| `infrastructure` | `docker compose config`, `promtool check` da configuração e das regras de alerta, testes unitários dos alertas (`promtool test rules`) e build da imagem |
 
 ### Teste de carga
 
@@ -174,11 +186,11 @@ Os endpoints de health e de métricas não exigem autenticação.
 docker compose --profile app --profile observability up -d --build
 ```
 
-| Ferramenta | Endereço               | O que mostra                                                                                                                                                                                                                                                                   |
-| ---------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Grafana    | http://localhost:3100  | dashboard **Wagering service** (abre como página inicial): throughput por status, latência p50/p95/p99, espera do lock da wallet, duplicatas e conflitos, outbox (pendentes, lag, publicações), consumidor SQS, DLQ, divergências de reconciliação e CPU/memória por instância |
-| Prometheus | http://localhost:9090  | coleta o `/metrics` das três réplicas a cada 5 s (e de `bun run dev` na porta 3000, via `host.docker.internal`)                                                                                                                                                                |
-| Jaeger     | http://localhost:16686 | traces distribuídos do serviço `wagering-service`                                                                                                                                                                                                                              |
+| Ferramenta | Endereço               | O que mostra                                                                                                                                                                                                                                                                                                           |
+| ---------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Grafana    | http://localhost:3100  | dashboard **Wagering service** (abre como página inicial): throughput por status, latência p50/p95/p99, espera do lock da wallet, duplicatas e conflitos, outbox (pendentes, lag, publicações), consumidor SQS, DLQ, alertas disparando, reconciliação periódica, retenção de inbox/outbox e CPU/memória por instância |
+| Prometheus | http://localhost:9090  | coleta o `/metrics` das três réplicas a cada 5 s (e de `bun run dev` na porta 3000, via `host.docker.internal`) e avalia as regras de alerta (aba **Alerts**)                                                                                                                                                          |
+| Jaeger     | http://localhost:16686 | traces distribuídos do serviço `wagering-service`                                                                                                                                                                                                                                                                      |
 
 **Traces.** Com `OTEL_ENABLED=true` a aplicação exporta spans via OTLP/HTTP. Um trace segue a operação inteira:
 
@@ -193,6 +205,29 @@ process wager-transactions             (consumidor SQS, continua o traceparent d
 ```
 
 O contexto do trace é gravado junto com o evento na outbox (coluna `headers`, na mesma transação SQL) e enviado como atributo `traceparent` da mensagem SQS; mensagens recebidas com `traceparent` continuam o trace do produtor. Toda resposta HTTP traz `x-trace-id`, e os logs JSON escritos dentro de um span trazem `traceId` e `spanId`, o que permite ir do log ao trace.
+
+**Alertas.** As regras ficam em [docker/observability/alerts.yml](docker/observability/alerts.yml) e têm testes em [alerts.test.yml](docker/observability/alerts.test.yml), rodados no CI com `promtool test rules`:
+
+| Alerta                    | Condição                                                       | Severidade |
+| ------------------------- | -------------------------------------------------------------- | ---------- |
+| `WalletBalanceDivergence` | a última reconciliação completa achou alguma wallet divergente | critical   |
+| `ReconciliationStale`     | nenhuma reconciliação completa há mais de 30 min               | warning    |
+| `OutboxLagHigh`           | evento mais antigo não publicado com mais de 30 s, por 2 min   | warning    |
+| `OutboxStuck`             | outbox sem drenar há mais de 5 min                             | critical   |
+| `OutboxPublishFailures`   | publicações na outbox falhando por 5 min                       | warning    |
+| `DeadLetterQueueNotEmpty` | mensagens na DLQ                                               | warning    |
+| `SqsRetriesSpiking`       | mais de 1 mensagem/s devolvida à fila por falha transitória    | warning    |
+| `WageringInstanceDown`    | instância sem responder ao scrape por 1 min                    | critical   |
+| `WagerLatencyHigh`        | p99 do processamento acima de 1 s                              | warning    |
+| `WalletLockContention`    | p95 da espera pelo lock da wallet acima de 500 ms              | warning    |
+| `RejectionRateHigh`       | mais de 20% das transações rejeitadas por 10 min               | warning    |
+
+## Manutenção em segundo plano
+
+Além do consumidor SQS, do publisher da outbox e do worker de referências pendentes, cada instância roda dois workers de manutenção:
+
+- **Retenção de inbox e outbox.** Apaga eventos da outbox já publicados há mais de `OUTBOX_RETENTION_HOURS` e mensagens da inbox já processadas há mais de `INBOX_RETENTION_DAYS`. Trabalha em lotes de `RETENTION_BATCH_SIZE` com `FOR UPDATE SKIP LOCKED`, então várias instâncias podem rodar ao mesmo tempo sem disputar as mesmas linhas, e repete enquanto houver lote cheio. Eventos pendentes e mensagens ainda não processadas nunca são apagados. A janela da inbox precisa ser maior que qualquer reentrega possível do SQS, porque é ela que torna o consumo idempotente.
+- **Reconciliação periódica.** Compara, para todas as wallets, o saldo gravado com a soma do ledger da wallet e com o razão de partidas dobradas, dentro de uma transação somente leitura `REPEATABLE READ` (um snapshot consistente, sem bloquear escritas). Um advisory lock do Postgres garante que só uma instância varre por vez; as outras pulam a rodada. Divergências **não** são corrigidas automaticamente: viram log de erro, métrica e o alerta `WalletBalanceDivergence`.
 
 ## Autenticação
 
@@ -276,6 +311,11 @@ docker compose exec localstack awslocal sqs receive-message \
 | `SQS_CONSUMER_POLLERS`                        | `4`                     | loops de long polling concorrentes por instância                 |
 | `OUTBOX_POLL_INTERVAL_MS`                     | `500`                   | intervalo ocioso do publisher                                    |
 | `PENDING_REFERENCE_POLL_INTERVAL_MS`          | `1000`                  | intervalo ocioso do worker de referências                        |
+| `OUTBOX_RETENTION_HOURS`                      | `72`                    | por quanto tempo eventos já publicados ficam na outbox           |
+| `INBOX_RETENTION_DAYS`                        | `7`                     | por quanto tempo mensagens processadas ficam na inbox            |
+| `RETENTION_BATCH_SIZE`                        | `1000`                  | linhas apagadas por lote na limpeza                              |
+| `RETENTION_INTERVAL_MS`                       | `600000`                | intervalo entre rodadas de limpeza                               |
+| `RECONCILIATION_INTERVAL_MS`                  | `300000`                | intervalo entre reconciliações completas                         |
 | `LOG_LEVEL`                                   | `info`                  | `trace`, `debug`, `info`, `warn`, `error`                        |
 | `DB_DEBUG`                                    | `false`                 | imprime o SQL executado pelo ORM                                 |
 | `AUTH_ENABLED`                                | `false`                 | liga a validação de JWT                                          |
