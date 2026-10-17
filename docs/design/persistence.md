@@ -15,6 +15,7 @@ Escritas à mão em SQL, com `up` e `down`, em `infrastructure/persistence/migra
 | Migration                            | Conteúdo                                                                      |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
 | `Migration20261014InitialSchema`     | wallets, transações, ledger, inbox, outbox, constraints e triggers            |
+| `Migration20261015OutboxAggregateIndex` | índice parcial `(aggregate_id, sequence)` das mensagens pendentes, usado no claim por wallet do publisher |
 | `Migration20261016DoubleEntryLedger` | razão de partidas dobradas, triggers de balanceamento e backfill do histórico |
 | `Migration20261017OutboxHeaders`     | coluna `headers` da outbox (contexto de trace)                                |
 | `Migration20261018RetentionIndexes`  | índices parciais para a limpeza de inbox e outbox                             |
