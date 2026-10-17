@@ -37,6 +37,9 @@ export class PublishOutboxEvents {
     return { published, failed };
   }
 
+  // Cada rodada envia o N-ésimo bloco de cada wallet, juntando blocos de wallets diferentes no
+  // mesmo SendMessageBatch. Uma wallet só passa para o próximo bloco se o anterior saiu inteiro:
+  // na primeira falha ela fica bloqueada e o resto espera o próximo ciclo, na ordem.
   private async publishInOrder(messages: OutboxMessage[]): Promise<PublishOutboxEventsResult> {
     const size = this.publisher.maxBatchSize;
     const chunksByAggregate = new Map<string, OutboxMessage[][]>();
@@ -78,6 +81,9 @@ export class PublishOutboxEvents {
             for (const message of group) {
               const outcome = byId.get(message.id);
               if (!outcome || outcome.error !== undefined) {
+                // As mensagens seguintes desta wallet no lote podem até ter sido aceitas pelo SQS,
+                // mas ficam pendentes e saem de novo depois desta. A duplicata é descartada pelo
+                // MessageDeduplicationId (eventId) ou, fora da janela do FIFO, pelo consumidor.
                 message.scheduleRetry(now, outcome?.error ?? 'no publish outcome');
                 blocked.add(message.aggregateId);
                 failed += 1;

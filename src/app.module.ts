@@ -46,6 +46,7 @@ import { JwtTokenVerifier, readJwtVerifierConfig } from './infrastructure/auth/j
 import { AUTH_ENABLED, AuthGuard } from './interfaces/http/auth.guard';
 import { HealthController } from './interfaces/http/health.controller';
 import { HttpErrorFilter } from './interfaces/http/http-error.filter';
+import { DocsController } from './interfaces/http/docs.controller';
 import { LedgerController } from './interfaces/http/ledger.controller';
 import { MetricsController } from './interfaces/http/metrics.controller';
 import { requestContextMiddleware } from './interfaces/http/request-context.middleware';
@@ -64,6 +65,7 @@ import { BackgroundWorkers } from './interfaces/workers/background-workers';
     WalletsController,
     WageringController,
     LedgerController,
+    DocsController,
   ],
   providers: [
     ormProvider,

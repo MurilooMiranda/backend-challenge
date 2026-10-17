@@ -11,6 +11,9 @@ import { type Telemetry, noopTelemetry } from '@/application/telemetry';
 import { SpanKind, withSpan } from '../observability/tracing';
 import { MikroOrmWageringUnitOfWork } from './mikro-orm-unit-of-work';
 
+// Traduz erros do driver para a linguagem da aplicação. Violação de UNIQUE vira um erro que o caso
+// de uso sabe refazer; deadlock, timeout de lock e conexão perdida viram indisponibilidade
+// transitória (503 no HTTP, nova tentativa na fila).
 export function translatePersistenceError(error: unknown): unknown {
   if (error instanceof UniqueConstraintViolationException) {
     return new UniqueViolationError((error as { constraint?: string }).constraint);

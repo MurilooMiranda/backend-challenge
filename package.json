@@ -15,7 +15,8 @@
     "test:concurrency": "bun test test/concurrency",
     "test:load": "bun load-test/run.ts",
     "auth:smoke": "bun scripts/auth-smoke.ts",
-    "test:property": "bun test property"
+    "test:property": "bun test property",
+    "check": "bun scripts/check.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

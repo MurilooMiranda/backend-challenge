@@ -7,6 +7,7 @@ RUN bun install --frozen-lockfile --production
 
 COPY tsconfig.json ./
 COPY src ./src
+COPY docs/api ./docs/api
 
 ENV NODE_ENV=production
 EXPOSE 3000

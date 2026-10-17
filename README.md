@@ -5,6 +5,9 @@
 Serviço financeiro que processa transações de apostas (`BET`, `WIN`, `LOSS`, `REFUND`, `ROLLBACK`) recebidas de provedores de jogos via **HTTP** e **SQS**, mantendo saldo, ledger auditável e eventos de integração corretos sob mensagens duplicadas, fora de ordem e processamento concorrente em múltiplas instâncias.
 
 - Enunciado: [CHALLENGE.md](CHALLENGE.md)
+- Arquitetura (mapa do sistema, garantias e trade-offs): [ARCHITECTURE.md](ARCHITECTURE.md)
+- Documentação técnica (design por assunto, ADRs, contratos e runbooks): [docs/](docs/README.md)
+- Contrato da API: [`/docs`](http://localhost:3000/docs) com a aplicação rodando (Swagger UI), fonte em [docs/api/openapi.yaml](docs/api/openapi.yaml)
 
 ## Stack
 
@@ -74,6 +77,16 @@ bun run auth:smoke
 | `bun run test:property`    | testes baseados em propriedades (fast-check): sequências aleatórias de operações verificando as invariantes, inclusive concorrência contra o Postgres; `FC_NUM_RUNS` / `FC_NUM_RUNS_DB` aumentam o número de casos |
 | `bun run test:load`        | teste de carga com 3 instâncias; relatório em `load-test/results/latest.md`                                                                                                                                        |
 | `bun run auth:smoke`       | valida a autenticação ponta a ponta contra o Keycloak e a aplicação (`--profile app`)                                                                                                                              |
+| `bun run check`            | tudo o que o CI valida, em sequência e com resumo; `--quick` só o que não precisa de Docker                                                                                                                        |
+
+**Para validar tudo de uma vez, use `bun run check`.** Ele roda as mesmas etapas do CI, em ordem, e para na primeira falha:
+
+1. Prettier, typecheck e testes unitários;
+2. `docker compose config` e `promtool` (configuração, regras e testes dos alertas, via Docker);
+3. sobe Postgres e LocalStack, se não estiverem no ar, e roda integração, concorrência e propriedades;
+4. build da imagem.
+
+No fim, imprime um resumo com o tempo de cada etapa. `bun run check --quick` roda só as etapas que não precisam de Docker (Prettier, typecheck e unitários, em poucos segundos).
 
 Os testes de integração e concorrência precisam do `docker compose up -d`. Eles usam o banco `wagering_test` e criam filas temporárias próprias no LocalStack, então podem rodar com a aplicação de desenvolvimento ligada.
 
@@ -106,6 +119,8 @@ Cria (se necessário) o banco `wagering_load`, sobe 3 instâncias da aplicação
 | `LOAD_DATABASE_URL`                 | `.../wagering_load` |
 
 ## API
+
+A especificação completa (schemas, exemplos, status por resultado e papéis exigidos) fica em **`/docs`** (Swagger UI) e `/docs/openapi.json`, servidos pela própria aplicação a partir de [docs/api/openapi.yaml](docs/api/openapi.yaml). O contrato das filas e dos eventos está em [docs/api/messaging.md](docs/api/messaging.md).
 
 Todos os valores monetários trafegam como string decimal com exatamente duas casas: `{ "amount": "25.00", "currency": "BRL" }`. Toda resposta carrega o header `x-correlation-id` (reaproveitado da requisição quando enviado).
 
@@ -177,8 +192,9 @@ curl localhost:3000/providers/provider-a/wagering/transactions/transaction-123
 | `GET /health/live`  | processo vivo                              |
 | `GET /health/ready` | Postgres e SQS alcançáveis (`200` / `503`) |
 | `GET /metrics`      | métricas no formato Prometheus             |
+| `GET /docs`         | especificação OpenAPI (Swagger UI)         |
 
-Os endpoints de health e de métricas não exigem autenticação.
+Os endpoints de health, métricas e documentação não exigem autenticação.
 
 ## Observabilidade
 
@@ -248,7 +264,7 @@ O realm `wagering` é importado automaticamente de [docker/keycloak/realm](docke
 | `GET /providers/:providerId/...`                  | `provider` do mesmo `providerId` e `operator`                                          |
 | `GET /wallets/:id`                                | `provider` e `operator`                                                                |
 | `POST /wallets`, ledger, reconciliação, balancete | `operator`                                                                             |
-| `/health/*`, `/metrics`                           | abertos                                                                                |
+| `/health/*`, `/metrics`, `/docs`                  | abertos                                                                                |
 
 Mensagens da fila são um canal interno confiável e não carregam token; o `providerId` delas continua sujeito às validações de domínio.
 
@@ -340,4 +356,9 @@ test/
 ├── integration/     Postgres e LocalStack reais
 └── concurrency/     três processos da aplicação em paralelo
 load-test/           gerador de carga, relatório e resultados
+docs/
+├── api/             contrato HTTP (OpenAPI) e de mensageria
+├── design/          como cada parte funciona, por assunto
+├── adr/             Architecture Decision Records
+└── runbooks/        o que fazer quando cada alerta dispara
 ```

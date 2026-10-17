@@ -23,6 +23,8 @@ interface ConsistencyRow {
 export class MikroOrmMaintenanceStore implements MaintenanceStore {
   constructor(private readonly orm: MikroORM) {}
 
+  // Lotes pequenos com SKIP LOCKED: várias instâncias limpam ao mesmo tempo sem esperar umas pelas
+  // outras nem pelo publisher. O RETURNING 1 só serve para contar as linhas apagadas.
   async purgePublishedOutbox(publishedBefore: Date, limit: number): Promise<number> {
     return this.deleteReturningCount(
       `DELETE FROM outbox_messages
@@ -55,10 +57,14 @@ export class MikroOrmMaintenanceStore implements MaintenanceStore {
     );
   }
 
+  // Uma única transação REPEATABLE READ somente leitura: todos os lotes enxergam o mesmo snapshot,
+  // então o resultado é uma foto consistente de todas as wallets, e nenhuma escrita é bloqueada.
   async scanWalletConsistency(batchSize: number): Promise<WalletConsistencyScan | null> {
     try {
       return await this.orm.em.fork().transactional(
         async (em) => {
+          // Advisory lock de transação: só uma instância varre por vez; as outras recebem false e
+          // pulam a rodada em vez de esperar. É liberado no fim da transação, mesmo se o processo morrer.
           const [lock] = await em.execute<{ locked: boolean }[]>(
             'SELECT pg_try_advisory_xact_lock(?) AS locked',
             [RECONCILIATION_LOCK_KEY],

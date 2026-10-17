@@ -75,6 +75,9 @@ export class ProcessWagerTransaction {
         });
         return result;
       } catch (error) {
+        // Duas transações com a mesma chave de idempotência apontando para wallets diferentes não
+        // se bloqueiam no lock da wallet; quem as separa é o UNIQUE do banco. Refazer do zero faz
+        // a busca de idempotência encontrar a vencedora e responder replay ou conflito.
         if (error instanceof UniqueViolationError && attempt < MAX_ATTEMPTS) {
           this.telemetry.lockConflict(error.constraint ?? 'unique_violation');
           continue;
@@ -92,6 +95,8 @@ export class ProcessWagerTransaction {
   ): Promise<WagerTransactionResult> {
     const alreadyConsumed = await this.isAlreadyConsumed(uow, command, payloadHash);
 
+    // Primeira busca, antes do lock: um replay responde sem entrar na fila da wallet. Uma mensagem
+    // nova da fila que repete uma transação já feita (por exemplo, por HTTP) ainda entra na inbox.
     const earlyReplay = await this.findReplay(uow, command, payloadHash);
     if (earlyReplay) {
       if (!alreadyConsumed) {
@@ -100,6 +105,8 @@ export class ProcessWagerTransaction {
       return earlyReplay;
     }
 
+    // A conta da casa é compartilhada por todas as apostas do provedor; garanti-la antes de travar
+    // a wallet mantém a seção crítica curta.
     await uow.ensureAccounts([LedgerAccount.house(command.providerId, money.currency)]);
 
     const wallet = await uow.lockWallet(command.walletId);
@@ -107,6 +114,7 @@ export class ProcessWagerTransaction {
       throw new WalletNotFoundError(command.walletId);
     }
 
+    // Segunda busca, já com o lock: pega quem esperou na fila atrás da transação original.
     const replay = await this.findReplay(uow, command, payloadHash);
     if (replay) {
       if (!alreadyConsumed) {

@@ -21,6 +21,7 @@ tests:
           - exp_labels:
               severity: critical
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#walletbalancedivergence'
               summary: 'Wallet balances diverge from the ledger'
               description: >-
                 The last full reconciliation found 1 wallet(s) whose stored balance differs
@@ -42,6 +43,7 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#reconciliationstale'
               summary: 'No full wallet reconciliation in the last 30 minutes'
               description: 'The reconciliation worker is not completing scans; divergences would go unnoticed.'
 
@@ -60,6 +62,7 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#outboxlaghigh'
               summary: 'Integration events are being published late'
               description: 'The oldest unpublished outbox event is 45s old.'
 
@@ -78,6 +81,7 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#deadletterqueuenotempty'
               summary: 'Messages waiting in the dead-letter queue'
               description: '2 message(s) in the DLQ need investigation and possibly a redrive.'
 
@@ -98,6 +102,7 @@ tests:
               instance: 'app-2:3000'
               job: wagering
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#wageringinstancedown'
               summary: 'Instance app-2:3000 is down'
               description: 'Prometheus cannot scrape app-2:3000 for more than a minute.'
 
@@ -118,5 +123,6 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
+              runbook_url: 'https://github.com/MurilooMiranda/backend-challenge/blob/main/docs/runbooks/alerts.md#rejectionratehigh'
               summary: 'More than 20% of transactions are being rejected'
               description: 'Business rejections are valid outcomes, but a sustained spike usually means a provider integration problem.'

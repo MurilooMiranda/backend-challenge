@@ -66,6 +66,8 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
     providerId: string,
     externalTransactionId: string,
   ): Promise<WagerTransaction[]> {
+    // As duas chaves numa consulta só: em duas consultas separadas, um commit concorrente entre
+    // elas fazia uma aparecer e a outra não, e o replay virava um falso conflito.
     const records = await this.em.find(WagerTransactionRecord, {
       $or: [{ idempotencyKey }, { providerId, externalTransactionId }],
     });
@@ -131,6 +133,8 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   }
 
   addOutboxMessages(messages: OutboxMessage[]): void {
+    // O traceparent atual vai junto com o evento, na mesma transação, para que a publicação
+    // assíncrona (em outra instância, até) continue o trace da requisição que a originou.
     const headers = injectTraceHeaders();
     for (const message of messages) {
       this.em.create(OutboxRecord, outboxToRecordData(message.withHeaders(headers)));
@@ -140,6 +144,8 @@ export class MikroOrmWageringUnitOfWork implements WageringUnitOfWork {
   async ensureAccounts(accounts: LedgerAccount[]): Promise<void> {
     const missing = accounts.filter((account) => !this.ensuredAccounts.has(account.code));
     if (missing.length > 0) {
+      // ON CONFLICT sem alvo: a tabela tem mais de uma constraint única (code e wallet_id), e com
+      // ON CONFLICT (code) duas transações criando a mesma conta ao mesmo tempo estouravam na outra.
       const placeholders = missing.map(() => '(?, ?, ?, ?, ?)').join(', ');
       await this.em.execute(
         `INSERT INTO ledger_accounts (code, kind, currency, wallet_id, provider_id)

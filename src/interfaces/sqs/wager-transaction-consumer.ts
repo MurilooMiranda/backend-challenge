@@ -60,6 +60,9 @@ export function defaultConsumerOptions(
   };
 }
 
+// Falhas que se repetiriam iguais em qualquer nova tentativa vão direto para a DLQ. Todo o resto,
+// inclusive erro desconhecido, é tratado como transitório: na dúvida, tentar de novo (e acabar na
+// DLQ pela redrive policy) é melhor do que descartar uma transação financeira.
 export function isPermanentFailure(error: unknown): boolean {
   return (
     error instanceof RequestValidationError ||
@@ -194,6 +197,8 @@ export class WagerTransactionConsumer {
         channel: 'sqs',
       });
       addLogContext({ transactionId: result.transactionId });
+      // O ack só acontece depois do commit. Se o processo morrer entre os dois, a mensagem volta
+      // após o visibility timeout e a inbox, gravada no mesmo commit, a reconhece como replay.
       await this.ack(message);
       return { outcome: 'acked', messageId: parsed.messageId };
     } catch (error) {
@@ -226,6 +231,9 @@ export class WagerTransactionConsumer {
     for (const [index, message] of messages.entries()) {
       const outcome = await this.consume(message);
       outcomes.push(outcome);
+      // Processar as mensagens seguintes do grupo agora aplicaria uma transação posterior antes da
+      // que falhou. Elas voltam para a fila na hora, e o FIFO só entrega o grupo de novo depois
+      // que a mensagem que falhou for resolvida.
       if (outcome === 'retry') {
         await Promise.all(messages.slice(index + 1).map((rest) => this.changeVisibility(rest, 0)));
         break;

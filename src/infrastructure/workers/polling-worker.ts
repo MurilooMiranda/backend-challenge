@@ -28,6 +28,8 @@ export class PollingWorker {
     await this.loop;
   }
 
+  // tick() devolve true quando ainda há trabalho (lote cheio): o próximo ciclo começa na hora.
+  // Só dorme quando a fila esvazia, e stop() acorda o sono para encerrar sem esperar o intervalo.
   private async run(): Promise<void> {
     while (this.running) {
       let hasMoreWork = false;

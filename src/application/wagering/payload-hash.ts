@@ -25,6 +25,9 @@ export interface WagerPayloadFields {
   referenceExternalTransactionId?: string | undefined;
 }
 
+// Só os campos de negócio entram no hash, em JSON canônico (chaves ordenadas, sem espaços,
+// undefined omitido). Assim o mesmo pedido gera o mesmo hash por HTTP ou pela fila, com qualquer
+// ordem de chaves, e metadados como correlationId não transformam um replay em conflito.
 export function computeWagerPayloadHash(fields: WagerPayloadFields): string {
   const businessFields = {
     providerId: fields.providerId,

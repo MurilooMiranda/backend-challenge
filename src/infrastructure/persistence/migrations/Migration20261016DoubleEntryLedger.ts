@@ -46,6 +46,8 @@ export class Migration20261016DoubleEntryLedger extends Migration {
     `);
     this.addSql(`CREATE INDEX journal_postings_account_idx ON journal_postings (account_code);`);
 
+    // Backfill: recria no razão os lançamentos que já existiam no ledger das wallets, para que os
+    // triggers abaixo (que exigem os dois lados) valham também para o histórico.
     this.addSql(`
       INSERT INTO ledger_accounts (code, kind, currency, wallet_id)
       SELECT 'PLAYER:' || id, 'PLAYER_WALLET', currency, id FROM wallets;
@@ -141,6 +143,9 @@ export class Migration20261016DoubleEntryLedger extends Migration {
         FOR EACH ROW EXECUTE FUNCTION journal_assert_balanced();
     `);
 
+    // Os dois triggers seguintes amarram o ledger da wallet (subledger) ao razão nos dois sentidos:
+    // todo lançamento da wallet tem um posting igual na conta do jogador, e vice-versa. Assim o
+    // saldo da wallet e o saldo contábil do jogador não conseguem divergir.
     this.addSql(`
       CREATE FUNCTION wallet_entry_assert_journal() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN

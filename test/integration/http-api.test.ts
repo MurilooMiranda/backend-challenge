@@ -358,3 +358,17 @@ describe('GET /metrics', () => {
     }
   });
 });
+
+describe('GET /docs', () => {
+  it('serves the Swagger UI and the OpenAPI document', async () => {
+    const page = await fetch(`${baseUrl}/docs`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    expect(await page.text()).toContain('/docs/openapi.json');
+
+    const { status, body } = await get('/docs/openapi.json');
+    expect(status).toBe(200);
+    expect(body.openapi).toBe('3.1.0');
+    expect(Object.keys(body.paths)).toContain('/wagering/transactions');
+  });
+});

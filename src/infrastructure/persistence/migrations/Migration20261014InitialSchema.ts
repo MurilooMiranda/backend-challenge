@@ -55,6 +55,8 @@ export class Migration20261014InitialSchema extends Migration {
       );
     `);
 
+    // No máximo uma reversão PROCESSED por transação de referência, seja REFUND ou ROLLBACK
+    // (ADR 0010). Reversões rejeitadas não entram no índice e não bloqueiam uma válida depois.
     this.addSql(`
       CREATE UNIQUE INDEX wager_tx_single_reversal_uq
         ON wager_transactions (reference_transaction_id)
@@ -149,6 +151,10 @@ export class Migration20261014InitialSchema extends Migration {
         FOR EACH ROW EXECUTE FUNCTION ledger_assert_chain();
     `);
 
+    // Constraint triggers deferidas rodam no COMMIT, não a cada instrução. Dentro da transação, o
+    // saldo da wallet e o novo lançamento são gravados em instruções separadas e ficam diferentes
+    // por um instante; a comparação só faz sentido com os dois gravados. Há um trigger em cada
+    // tabela para pegar também quem altera só um dos lados.
     this.addSql(`
       CREATE FUNCTION wallet_assert_matches_ledger() RETURNS trigger LANGUAGE plpgsql AS $$
       DECLARE

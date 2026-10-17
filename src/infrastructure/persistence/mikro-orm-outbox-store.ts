@@ -22,7 +22,14 @@ export class MikroOrmOutboxStore implements OutboxStore {
     handler: (messages: OutboxMessage[]) => Promise<void>,
   ): Promise<OutboxMessage[]> {
     try {
+      // A transação fica aberta durante o envio ao SQS (handler). Se o processo morrer no meio,
+      // o rollback solta os locks e outra instância republica: entrega at-least-once.
       return await this.orm.em.fork().transactional(async (em) => {
+        // Só a mensagem pendente mais antiga de cada wallet (a "cabeça") pode ser travada aqui.
+        // Travar a cabeça reivindica a wallet inteira: outro publisher pula essa linha
+        // (SKIP LOCKED) e não enxerga as seguintes como cabeça, então nunca publica um evento
+        // posterior antes de um anterior da mesma wallet. Uma cabeça em backoff
+        // (next_attempt_at no futuro) segura a fila da wallet pelo mesmo motivo.
         const heads = await em.execute<{ aggregate_id: string }[]>(
           `SELECT o.aggregate_id
              FROM outbox_messages o
@@ -44,6 +51,8 @@ export class MikroOrmOutboxStore implements OutboxStore {
           return [];
         }
 
+        // Leva junto as próximas mensagens das wallets reivindicadas, em ordem. FOR UPDATE sem
+        // SKIP LOCKED é seguro: só quem segura a cabeça chega até elas, e esse alguém somos nós.
         const claimed = await em.execute<{ id: string }[]>(
           `SELECT id
              FROM outbox_messages

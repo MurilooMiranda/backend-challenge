@@ -36,6 +36,8 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
         },
         parent,
       );
+  // O traceId é lido agora porque, quando o evento 'finish' dispara e o log de acesso é escrito,
+  // o span já terminou e não está mais no contexto.
   const traceId = span?.isRecording() ? span.spanContext().traceId : undefined;
   if (traceId) {
     res.setHeader('x-trace-id', traceId);
