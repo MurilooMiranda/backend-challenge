@@ -12,13 +12,13 @@ Cada unidade de trabalho usa `orm.em.fork().transactional(...)`: um `EntityManag
 
 Escritas à mão em SQL, com `up` e `down`, em `infrastructure/persistence/migrations`. O gerador de schema não cria triggers, constraint triggers deferidas nem índices parciais, e são justamente esses recursos que garantem as invariantes. A lista é explícita (`migrationsList`), sem descoberta por glob, o que funciona igual no Bun, no container e nos testes.
 
-| Migration                            | Conteúdo                                                                      |
-| ------------------------------------ | ----------------------------------------------------------------------------- |
-| `Migration20261014InitialSchema`     | wallets, transações, ledger, inbox, outbox, constraints e triggers            |
+| Migration                               | Conteúdo                                                                                                  |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Migration20261014InitialSchema`        | wallets, transações, ledger, inbox, outbox, constraints e triggers                                        |
 | `Migration20261015OutboxAggregateIndex` | índice parcial `(aggregate_id, sequence)` das mensagens pendentes, usado no claim por wallet do publisher |
-| `Migration20261016DoubleEntryLedger` | razão de partidas dobradas, triggers de balanceamento e backfill do histórico |
-| `Migration20261017OutboxHeaders`     | coluna `headers` da outbox (contexto de trace)                                |
-| `Migration20261018RetentionIndexes`  | índices parciais para a limpeza de inbox e outbox                             |
+| `Migration20261016DoubleEntryLedger`    | razão de partidas dobradas, triggers de balanceamento e backfill do histórico                             |
+| `Migration20261017OutboxHeaders`        | coluna `headers` da outbox (contexto de trace)                                                            |
+| `Migration20261018RetentionIndexes`     | índices parciais para a limpeza de inbox e outbox                                                         |
 
 As FKs são `DEFERRABLE INITIALLY DEFERRED`: os records não declaram relações, e o Unit of Work pode ordenar os INSERTs livremente dentro da transação. A verificação acontece no COMMIT.
 
